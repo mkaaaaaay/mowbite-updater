@@ -8,10 +8,11 @@
 #   POST ?check         look within the next minute whether there's something new
 #   POST ?room          list what can be deleted to make room
 #   POST ?free=<what>   delete img:<id> (one from that list), all (the whole list) or cache (the build cache)
+# a POST only with Content-Type: application/json (whatever the body), and nothing for other sites' pages to read: a
+# page in some browser in the network can't change anything here, its own page and programs (MowBite) can.
 # it runs as root next to docker: nothing from the request gets anywhere unchecked
 . /lib.sh
-cors() { printf 'Access-Control-Allow-Origin: *\r\n'; }
-plain() { cors; printf 'Content-Type: text/plain\r\nCache-Control: no-store\r\n\r\n%s\n' "$1"; exit 0; }
+plain() { printf 'Content-Type: text/plain\r\nCache-Control: no-store\r\n\r\n%s\n' "$1"; exit 0; }
 # json string content: control characters out, backslashes and quotes escaped
 jstr() { tr -d '\000-\010\013-\037' | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/ /g'; }
 request() { mkdir -p "$STATE" && echo "$1" >> "$REQ" && plain ok; }
@@ -19,6 +20,7 @@ is_part() { valid "$1" "$ID" && part_ids | grep -qx "$1"; }
 
 case "$REQUEST_METHOD" in
 POST)
+  case ${CONTENT_TYPE:-} in application/json*) ;; *) plain bad ;; esac
   p=${QUERY_STRING#*=}
   case $QUERY_STRING in
   conf)
@@ -35,6 +37,12 @@ POST)
     mkdir -p "$STATE"
     tmp=$(mktemp "$CONF.XXXXXX") || plain failed
     {
+      # the settings of a part not there right now (its stack down) stay
+      known=" at days "
+      for id in $(part_ids); do known="$known$id ${id}_auto "; done
+      [ -f "$CONF" ] && while read -r k v; do
+        case $known in *" $k "*) ;; *) valid "$k" '[a-z][a-z0-9_]{0,60}' && [ -n "$v" ] && echo "$k $v" ;; esac
+      done < "$CONF"
       keep at '([01][0-9]|2[0-3]):[0-5][0-9]'
       keep days '(daily|[1-7](,[1-7]){0,6})'
       for id in $(part_ids); do
@@ -66,7 +74,6 @@ POST)
   plain bad
   ;;
 GET)
-  cors
   printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
   # the settings: each part's channel and whether it updates by itself, when
   printf '{"conf":{"at":"%s","days":"%s"' "$(conf at 03:00 | jstr)" "$(conf days daily | jstr)"

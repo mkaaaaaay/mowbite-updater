@@ -13,9 +13,10 @@ label() { docker inspect -f "{{index .Config.Labels \"com.docker.compose.$2\"}}"
 own() { docker inspect -f "{{index .Config.Labels \"$L.$2\"}}" "$1" 2>/dev/null; }
 exists() { docker inspect "$1" > /dev/null 2>&1; }
 
-# itself: by its name in compose.yaml, else by its hostname (the container's id)
+# itself: by its name in compose.yaml, else by its id as its own mounts show it (on the host's network its hostname is the
+# host's)
 ME=${UPDATER_CONTAINER:-mowbite-updater}
-exists "$ME" || ME=$(hostname)
+exists "$ME" || ME=$(sed -n 's|.*/containers/\([0-9a-f]\{64\}\)/.*|\1|p' /proc/self/mountinfo 2>/dev/null | head -n1)
 
 STATE=${STATE_DIR:-$(label "$ME" project.working_dir)/.updater}
 CONF=$STATE/conf
@@ -85,7 +86,7 @@ part_ids() { get parts | tr ' ' '\n' | cut -d: -f1 | grep .; }
 # VERSION=edge, "edge", 'edge', with export in front or a comment after, windows line ends
 om_env() { echo "$(label "$OM" project.working_dir)/.env"; }
 om_version() {
-  v=$(tr -d '\r' < "$(om_env)" 2>/dev/null | sed -n 's/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}VERSION=//p' | head -n1 |
+  v=$({ tr -d '\r' < "$(om_env)"; } 2>/dev/null | sed -n 's/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}VERSION=//p' | head -n1 |
     sed 's/[[:space:]][[:space:]]*#.*//; s/^["'\'']//; s/["'\''][[:space:]]*$//; s/[[:space:]]*$//')
   valid "$v" "$TAG" && echo "$v"
 }

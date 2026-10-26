@@ -76,7 +76,8 @@ new_os() { grep -qx 'ID=openmower-os' /host/os-release 2> /dev/null; }
 image_of() { docker inspect -f '{{.Image}}' "$1" 2>/dev/null; }
 ref_of() { docker inspect -f '{{.Config.Image}}' "$1" 2>/dev/null; }
 id_of() { docker image inspect -f '{{.Id}}' "$1" 2>/dev/null; }
-running() { [ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = true ]; }
+# (a container waiting for its next restart counts as running for docker, not here)
+running() { [ "$(docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null)" = running ]; }
 day_of() { docker image inspect -f '{{.Created}}' "$1" 2>/dev/null | cut -c1-10; }
 digests() { docker image inspect -f '{{join .RepoDigests " "}}' "$1" 2>/dev/null; }
 # the digests the registry knows the image of a container by: its repo digests, and its id (with containerd's image
@@ -120,7 +121,14 @@ source_of() {
 # what's there to look after, written to the status: "<id>:<container>:<kind> ...", the name of each (<id>_name).
 # kind build: from a github context, local: built from a copy here (left as it is), image: from a registry
 kind_of() {
-  if [ -n "$(source_of "$1")" ]; then echo build; elif [ -n "$(context_of "$1")" ]; then echo local; else echo image; fi
+  if [ -n "$(source_of "$1")" ]; then
+    echo build
+  # (a stack with image: and build: . both, like MowBite's, is from its registry as long as that has its tag)
+  elif [ -n "$(context_of "$1")" ] && [ -z "$(remote_digest "$(ref_of "$1")")" ]; then
+    echo local
+  else
+    echo image
+  fi
 }
 find_parts() {
   local out="" c id
@@ -156,7 +164,7 @@ find_parts() {
   for c in $(docker ps -a --filter "label=$L=on" --format '{{.Names}}'); do
     case $c in "$OM" | "$APP" | "$PLANNER" | "$ME") continue ;; esac
     in_compose "$c" || continue
-    id=c_$(echo "$c" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '_' | cut -c1-38)
+    id=c_$(echo "$c" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '_' | cut -c1-30)_$(printf '%s' "$c" | md5sum | cut -c1-4)
     out="$out $id:$c:$(kind_of "$c")"
     status "${id}_name" "$(own "$c" name | tr -d '\n' | cut -c1-40 | grep . || echo "$c")"
     if [ "$(own "$c" gate)" = none ]; then status "${id}_gate" none; else status "${id}_gate" mower; fi
@@ -173,7 +181,7 @@ check_of() {
   local c v
   [ "$(kind "$1")" = openmower ] && echo mqtt && return
   c=$(box "$1")
-  v=$(own "$c" log)
+  v=$(own "$c" log | tr -d '\n')
   [ -n "$v" ] && echo "log:$v" && return
   v=$(own "$c" check)
   [ -n "$v" ] && echo "http:$v" && return
@@ -182,15 +190,21 @@ check_of() {
   planner) echo "log:MowBite Planner answers" && return ;;
   xtechapp) echo "http::3000/" && return ;;
   esac
-  [ -n "$(docker inspect -f '{{if .Config.Healthcheck}}x{{end}}' "$c" 2>/dev/null)" ] && echo health && return
+  v=$(docker inspect -f '{{if .Config.Healthcheck}}{{index .Config.Healthcheck.Test 0}}{{end}}' "$c" 2>/dev/null)
+  [ -n "$v" ] && [ "$v" != NONE ] && echo health && return
   echo up
 }
 # a check's address: ":port/path" on the container's own address (or here, on the host's network)
 url_of() {
   case $2 in
   :*)
-    ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$1" 2>/dev/null | awk '{print $1}')
-    echo "http://${ip:-127.0.0.1}$2"
+    if [ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$1" 2>/dev/null)" = host ]; then
+      echo "http://127.0.0.1$2"
+    else
+      ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$1" 2>/dev/null | awk '{print $1}')
+      # (no address of its own: nothing to ask, the check fails)
+      [ -n "$ip" ] && echo "http://$ip$2"
+    fi
     ;;
   *) echo "$2" ;;
   esac
@@ -419,9 +433,10 @@ restart() {
 seen() {
   local c end ok how started s
   c=$(box "$1")
-  case $(kind "$1") in openmower) end=360 ;; build) end=180 ;; *) end=120 ;; esac
-  end=$(($(now) + end))
   how=$(check_of "$1")
+  # (a healthcheck may take a while between its tries)
+  case $(kind "$1"):$how in openmower:*) end=360 ;; build:* | *:health) end=300 ;; *) end=120 ;; esac
+  end=$(($(now) + end))
   ok=0
   started=
   while [ "$(now)" -lt "$end" ]; do
@@ -434,7 +449,7 @@ seen() {
       http:*) wget -q -T 5 -O /dev/null "$(url_of "$c" "${how#http:}")" 2> /dev/null && return 0 ;;
       health) [ "$(docker inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null)" = healthy ] && return 0 ;;
       up)
-        s=$(docker inspect -f '{{.State.StartedAt}}' "$c")
+        s=$(docker inspect -f '{{.State.StartedAt}} {{.RestartCount}}' "$c")
         if [ "$s" = "$started" ]; then ok=$((ok + 1)); else started=$s; ok=0; fi
         [ $ok -ge 3 ] && return 0
         ;;
@@ -450,8 +465,10 @@ seen() {
 # the new version of a part didn't run: back to the one before ($2, a rollback tag) under its tag ($3), the file it
 # changed put back, started again. OpenMower and builds only while OpenMower doesn't drive the mower, else left for
 # the next run to look at (1). the version left out from now on ($4)
+# whatever the mower does, it may be started again: an app only to look at, or one set to update with the mower out
+harmless() { case $1 in mowbite | xtechapp | openmowerapp) return 0 ;; esac; [ "$(gate "$1")" = none ]; }
 go_back() {
-  if [ "$(kind "$1")" != image ] && ! quiet; then
+  if ! harmless "$1" && ! quiet; then
     log "$1: didn't run as it should, but the mower isn't idle (or there's no broker): nothing restarted, looked at again next time"
     status "$1" unconfirmed
     return 1
@@ -470,17 +487,22 @@ go_back() {
 # started if a restart was cut off, then seen running, or back to the one before
 settle() {
   for p in $(part_ids); do
+    # (pending: the rollback tag, the tag it goes back under, the image it has to run on, what's left out when it doesn't)
     # shellcheck disable=SC2046
     set -- $(get "pending_$p")
     [ -n "$1" ] || continue
+    if ! harmless "$p" && ! quiet; then
+      log "$p: still to be seen running, the mower isn't idle, later"
+      continue
+    fi
     log "$p: was restarted on a new version and not seen running, looking now"
-    if restart "$p" "$(id_of "$2")"; then
+    if restart "$p" "${3:-$(id_of "$2")}"; then
       log "$p: runs"
       keep_change "$p"
       status "pending_$p"
       status "$p" updated "$(now)"
     else
-      go_back "$p" "$1" "$2" "$(id_of "$2")"
+      go_back "$p" "$1" "$2" "${4:-$(id_of "$2")}"
     fi
   done
   status progress
@@ -511,20 +533,22 @@ version_of() {
   fi
   ref_of "$(box "$1")" | sed 's/.*://'
 }
-# the tag it goes to: on beta (or without releases) its own tag, on stable the newest release
+# the tag it goes to: on stable the newest release, on beta its own tag (the one it had before stable, MowBite's is
+# :latest), without releases the one it has
 image_target() {
   local c ref v
   c=$(box "$1")
   ref=$(ref_of "$c")
-  if [ -n "$(stable_source "$1")" ]; then
-    if [ "$(channel "$1")" = stable ]; then
-      v=$(stable_tag "$1")
-      [ -n "$v" ] && echo "$(repo_of "$ref"):$v"
-    else
-      echo "$(repo_of "$ref"):latest"
-    fi
-  else
+  if [ -z "$(stable_source "$1")" ]; then
     echo "$ref"
+  elif [ "$(channel "$1")" = stable ]; then
+    v=$(stable_tag "$1")
+    [ -n "$v" ] && echo "$(repo_of "$ref"):$v"
+  elif [ "$1" = mowbite ]; then
+    echo "$(repo_of "$ref"):latest"
+  else
+    v=$(get "$1_beta")
+    echo "${v:-$ref}"
   fi
 }
 # a part's newest rollback tag on another image than the one that runs ($2), to go back to by hand
@@ -538,6 +562,7 @@ update_image() {
   local p="$1" c current repo before target back pulled file v need
   c=$(box "$p")
   progress "$p" prepare
+  running "$c" || { log "$p: not running, left as it is"; status "$p" stopped; return 0; }
   current=$(ref_of "$c")
   repo=$(repo_of "$current")
   before=$(image_of "$c")
@@ -576,6 +601,9 @@ update_image() {
   fi
   log "$p: kept the version before as $back"
   if [ "$target" != "$current" ]; then
+    # (the tag it had before stable, to come back to on beta)
+    [ "$(channel "$p")" = stable ] && [ -z "$(get "${p}_beta")" ] && status "${p}_beta" "$current"
+    [ "$(channel "$p")" = beta ] && status "${p}_beta"
     file=$(stackfile "$c" "$current")
     if [ -z "$file" ] || ! change_file "$p" "$file" "s|^\([[:space:]]*image:[[:space:]]*\)$(re "$current")[[:space:]]*\$|\1$target|"; then
       log "$p: the compose file can't be changed, nothing changed"
@@ -599,7 +627,7 @@ update_image() {
     return 2
   fi
   log "$p: $current -> $target"
-  status "pending_$p" "$back" "$current"
+  status "pending_$p" "$back" "$current" "$pulled" "$pulled"
   if restart "$p" "$pulled"; then
     v=$(version_of "$p")
     log "$p: updated to $v"
@@ -673,6 +701,7 @@ update_openmower() {
   local ref repo before old_version want target remote need free back rc base
   [ "$(kind openmower)" = openmower ] || return 0
   progress openmower prepare
+  running "$OM" || { log "openmower: not running, left as it is"; status openmower stopped; return 0; }
   ref=$(ref_of "$OM")
   repo=$(repo_of "$ref")
   before=$(image_of "$OM")
@@ -730,19 +759,25 @@ update_openmower() {
     status openmower error pull
     return 1
   fi
-  status pending_openmower "$back" "$ref"
+  status pending_openmower "$back" "$ref" "$(id_of "$target")" "$remote"
   if restart openmower "$(id_of "$target")"; then
     log "openmower: updated to $target"
     keep_change openmower
     status pending_openmower
     status openmower updated "$(now)" "$want"
     # what's built on OpenMower's image: again on the new one
+    rc=0
     for p in $(part_ids); do
       [ "$(kind "$p")" = build ] || continue
       base=$(base_of "$(box "$p")")
-      if [ "$base" = "$target" ]; then build "$p" after_openmower; else [ -n "$base" ] && log "$p: built on $base, not on $target, left as it is"; fi
+      if [ "$base" = "$target" ]; then
+        build "$p" after_openmower
+        [ $? -eq 2 ] && rc=2
+      else
+        [ -n "$base" ] && log "$p: built on $base, not on $target, left as it is"
+      fi
     done
-    return 0
+    return $rc
   fi
   go_back openmower "$back" "$ref" "$remote" || return 1
   [ "$target" = "$ref" ] || docker rmi "$target" > /dev/null 2>&1
@@ -809,7 +844,7 @@ build() {
     log "$p: the same image as before, it keeps running"
     docker rmi "$back" > /dev/null 2>&1
   else
-    status "pending_$p" "$back" "$img"
+    status "pending_$p" "$back" "$img" "$built" "$commit"
     restart "$p" "$built" || { go_back "$p" "$back" "$img" "$commit"; return 1; }
     status "pending_$p"
     log "$p: running again"
@@ -842,6 +877,7 @@ check_build() {
 update_build() {
   local want
   progress "$1" prepare
+  running "$(box "$1")" || { log "$1: not running, left as it is"; status "$1" stopped; return 0; }
   want=$(commit_of "$1")
   [ -n "$want" ] || { status "$1" error github; return 1; }
   if [ "$want" = "$(built_of "$1")" ] && base_same "$1"; then
@@ -1150,6 +1186,10 @@ serve() { pidof httpd > /dev/null || httpd -p "${PORT:-8083}" -h /www; }
 # (sourced by a test for its functions)
 [ -n "$UPDATER_NO_LOOP" ] && return 0
 trap 'exit 0' TERM INT
+if [ -z "$STATE_DIR" ] && [ -z "$(label "$ME" project.working_dir)" ]; then
+  echo "MowBite Updater: it has to run from a compose file (its settings and log go next to it), see its readme" >&2
+  while sleep 3600; do :; done
+fi
 mkdir -p "$STATE"
 chmod 700 "$STATE"
 serve

@@ -139,7 +139,7 @@ const busy = () => asked || (!!st && (st.requested || running()));
 
 async function load() {
   try {
-    const res = await fetch(API, {cache: 'no-store'});
+    const res = await fetch(API, {cache: 'no-store', signal: AbortSignal.timeout(8000)});
     if (!res.ok) throw new Error();
     st = await res.json();
     lost = false;
@@ -149,8 +149,9 @@ async function load() {
   }
   render();
 }
+// (as json, which only its own page and programs may send)
 async function post(query, body) {
-  const res = await fetch(API + '?' + query, {method: 'POST', body: body || ''});
+  const res = await fetch(API + '?' + query, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: body || '', signal: AbortSignal.timeout(8000)});
   if (!res.ok || (await res.text()).trim() !== 'ok') throw new Error();
 }
 function ask(query, body) {
@@ -163,10 +164,11 @@ function ask(query, body) {
     render();
   });
 }
+// only what changed: a value it shows but nobody set (OpenMower's channel from its .env) stays unset
 function setConf(patch) {
   Object.assign(st.conf, patch);
   failed = null;
-  const lines = Object.keys(st.conf).map((k) => k + ' ' + st.conf[k]);
+  const lines = Object.keys(patch).map((k) => k + ' ' + patch[k]);
   render();
   post('conf', lines.join('\n') + '\n').catch(() => {
     failed = tr('Not saved, the updater did not answer.');

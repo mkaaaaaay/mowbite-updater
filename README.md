@@ -98,7 +98,9 @@ All optional, in `compose.yaml` under `environment`:
 <details>
 <summary>For other apps: the interface</summary>
 
-The same one its page and MowBite use, on port 8083:
+The same one its page and MowBite use, on port 8083. A `POST` needs the header `Content-Type: application/json`
+(the body stays plain lines): so a web page some browser has open can't change anything, programs and its own page
+can.
 
 - `GET /cgi-bin/updater`: settings, apps, status, what can go and the log as JSON. While it updates, `status.progress`
   says what it does: `<app> <step> <percent or -> <since> [<done> <of>]`, steps `prepare`, `download`, `extract`,
