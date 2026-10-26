@@ -1,0 +1,95 @@
+#!/bin/sh
+# the updater's interface, for its own page, MowBite and other apps (on the mower's address, port 8083):
+#   GET                 settings, the parts, status, what can go and the log as json
+#   POST ?conf          lines "<key> <value>", each checked, the ones left out stay as they are: <part> (its channel:
+#                       beta or stable, OpenMower's tag), <part>_auto (0 or 1), at (HH:MM), days (daily or 1-7, commas)
+#   POST ?now[=<part>]  update all parts or one within the next minute
+#   POST ?back=<part>   a part from a registry back to the version before
+#   POST ?check         look within the next minute whether there's something new
+#   POST ?room          list what can be deleted to make room
+#   POST ?free=<what>   delete img:<id> (one from that list), all (the whole list) or cache (the build cache)
+# it runs as root next to docker: nothing from the request gets anywhere unchecked
+. /lib.sh
+cors() { printf 'Access-Control-Allow-Origin: *\r\n'; }
+plain() { cors; printf 'Content-Type: text/plain\r\nCache-Control: no-store\r\n\r\n%s\n' "$1"; exit 0; }
+# json string content: control characters out, backslashes and quotes escaped
+jstr() { tr -d '\000-\010\013-\037' | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/ /g'; }
+request() { mkdir -p "$STATE" && echo "$1" >> "$REQ" && plain ok; }
+is_part() { valid "$1" "$ID" && part_ids | grep -qx "$1"; }
+
+case "$REQUEST_METHOD" in
+POST)
+  p=${QUERY_STRING#*=}
+  case $QUERY_STRING in
+  conf)
+    len=${CONTENT_LENGTH:-0}
+    [ "$len" -gt 0 ] && [ "$len" -le 4000 ] || plain bad
+    body=$(head -c "$len")
+    # a value from the request when it's a valid one, else the one set before
+    pick() { printf '%s\n' "$body" | sed -n "s/^$1 //p" | head -n1 | grep -Ex "$2"; }
+    keep() {
+      v=$(pick "$1" "$2")
+      [ -n "$v" ] || v=$(conf "$1" "")
+      [ -z "$v" ] || echo "$1 $v"
+    }
+    mkdir -p "$STATE"
+    tmp=$(mktemp "$CONF.XXXXXX") || plain failed
+    {
+      keep at '([01][0-9]|2[0-3]):[0-5][0-9]'
+      keep days '(daily|[1-7](,[1-7]){0,6})'
+      for id in $(part_ids); do
+        keep "${id}_auto" '(0|1)'
+        if [ "$id" = openmower ]; then
+          # only what's offered: edge, its release or what its .env has
+          v=$(pick openmower "$TAG")
+          case " $(om_choices) " in *" $v "*) ;; *) v= ;; esac
+          [ -n "$v" ] || v=$(conf openmower "")
+          [ -z "$v" ] || echo "openmower $v"
+        else
+          keep "$id" '(beta|stable)'
+        fi
+      done
+    } > "$tmp" && mv "$tmp" "$CONF" && plain ok
+    rm -f "$tmp"
+    plain failed
+    ;;
+  now) request "now all" ;;
+  now=* | back=*) is_part "$p" && request "${QUERY_STRING%%=*} $p" ;;
+  check) request check ;;
+  room) request room ;;
+  free=cache | free=all) request "free $p" ;;
+  free=img:*)
+    id=${p#img:}
+    valid "$id" '[0-9a-f]{12}' && grep -q "^img $id " "$STATE/room" 2> /dev/null && request "free img $id"
+    ;;
+  esac
+  plain bad
+  ;;
+GET)
+  cors
+  printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+  # the settings: each part's channel and whether it updates by itself, when
+  printf '{"conf":{"at":"%s","days":"%s"' "$(conf at 03:00 | jstr)" "$(conf days daily | jstr)"
+  for id in $(part_ids); do
+    if [ "$id" = openmower ]; then ch=$(om_channel); else ch=$(channel "$id"); fi
+    printf ',"%s":"%s","%s_auto":%s' "$id" "$(echo "$ch" | jstr)" "$id" "$(conf "${id}_auto" 0 | grep -x '[01]' || echo 0)"
+  done
+  printf '},"parts":['
+  n=0
+  for line in $(get parts); do
+    id=${line%%:*}
+    rest=${line#*:}
+    printf '%s{"id":"%s","container":"%s","kind":"%s","name":"%s","gate":"%s"}' "$([ $n -gt 0 ] && echo ,)" "$id" "${rest%%:*}" "${rest#*:}" \
+      "$(get "${id}_name" | jstr)" "$(get "${id}_gate" | jstr)"
+    n=$((n + 1))
+  done
+  printf '],"requested":%s,"status":{' "$([ -s "$REQ" ] && echo true || echo false)"
+  jstr < "$STATUS" 2> /dev/null | awk '{k = $1; sub(/^[^ ]* ?/, ""); printf "%s\"%s\":\"%s\"", (NR > 1 ? "," : ""), k, $0}'
+  printf '},"room":{"items":['
+  grep '^img ' "$STATE/room" 2> /dev/null | jstr | awk '$3 ~ /^[0-9]+$/ {printf "%s{\"id\":\"%s\",\"bytes\":%s,\"refs\":\"%s\",\"kind\":\"%s\"}", (n++ ? "," : ""), $2, $3, $4, $5}'
+  printf '],"cache":%s},"log":[' "$(sed -n 's/^cache //p' "$STATE/room" 2> /dev/null | grep -x '[0-9][0-9]*' || echo 0)"
+  tail -n 200 "$LOG" 2> /dev/null | jstr | awk '{printf "%s\"%s\"", (NR > 1 ? "," : ""), $0}'
+  printf ']}\n'
+  ;;
+*) plain bad ;;
+esac
