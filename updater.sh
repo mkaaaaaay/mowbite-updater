@@ -5,6 +5,7 @@
 #                   on OpenMowerOS 3 there's no such container, OpenMower comes with the OS update there
 #   MowBite         its image again, beta (:latest) or stable (the newest release without a dash)
 #   MowBite Planner built again from its github context when that moved or OpenMower changed under it
+#   OpenMower's apps xtech's (ghcr.io/xtech/openmower-app) and the OpenMowerApp, their images again
 #   any container with the label mowbite.update=on: pulled again, or built again from github. with
 #     mowbite.update.check (":8080/health" on the container, or a url) or mowbite.update.log (a line in its log) it
 #     shows it runs, mowbite.update.gate=none updates it with the mower out, mowbite.update.stable=github:<owner>/<repo>
@@ -130,6 +131,20 @@ find_parts() {
   fi
   status openmower_name OpenMower
   status openmower_gate mower
+  # the apps of OpenMower's stack, by their images: xtech's app and the OpenMowerApp
+  for c in $(docker ps -a --format '{{.Names}}'); do
+    case $(repo_of "$(ref_of "$c")") in
+    ghcr.io/xtech/openmower-app) id=xtechapp ;;
+    ghcr.io/clemenselflein/openmowerapp) id=openmowerapp ;;
+    *) continue ;;
+    esac
+    case " $out " in *" $id:"*) continue ;; esac
+    in_compose "$c" || continue
+    out="$out $id:$c:image"
+    status "${id}_gate" mower
+  done
+  status xtechapp_name "OpenMower App (xtech)"
+  status openmowerapp_name OpenMowerApp
   for c in "$APP" "$PLANNER"; do
     exists "$c" && in_compose "$c" || continue
     if [ "$c" = "$APP" ]; then id=mowbite; else id=planner; fi
@@ -162,7 +177,11 @@ check_of() {
   [ -n "$v" ] && echo "log:$v" && return
   v=$(own "$c" check)
   [ -n "$v" ] && echo "http:$v" && return
-  case $1 in mowbite) echo "http::8080/cgi-bin/version" && return ;; planner) echo "log:MowBite Planner answers" && return ;; esac
+  case $1 in
+  mowbite) echo "http::8080/cgi-bin/version" && return ;;
+  planner) echo "log:MowBite Planner answers" && return ;;
+  xtechapp) echo "http::3000/" && return ;;
+  esac
   [ -n "$(docker inspect -f '{{if .Config.Healthcheck}}x{{end}}' "$c" 2>/dev/null)" ] && echo health && return
   echo up
 }
@@ -516,7 +535,7 @@ newest_back() {
 }
 
 update_image() {
-  local p="$1" c current repo before target back pulled file v
+  local p="$1" c current repo before target back pulled file v need
   c=$(box "$p")
   progress "$p" prepare
   current=$(ref_of "$c")
@@ -527,9 +546,12 @@ update_image() {
     status "$p" local
     return 0
   fi
-  room_for $ROOM_APP || { log "$p: less than $ROOM_APP MB free, nothing changed"; status "$p" nospace $ROOM_APP "$(free_mb)"; return 1; }
   target=$(image_target "$p")
   [ -n "$target" ] || { log "$p: no stable release"; status "$p" error no_stable; return 1; }
+  # room for what it has to download (its missing layers x5, else as much as the image that runs) and some to spare
+  need=$(need_mb "$target" "$before")
+  [ -n "$need" ] || need=$(($(docker image inspect -f '{{.Size}}' "$before" 2>/dev/null || echo 0) / 1048576))
+  room_for $((need + ROOM_APP)) || { log "$p: not enough room (needs $need MB and $ROOM_APP to spare, $(free_mb) MB free), nothing changed"; status "$p" nospace "$need" "$(free_mb)"; return 1; }
   # kept before anything moves its tag (an image only built here is gone once its tag is on another one)
   back=$(keep_back "$repo" "$before")
   [ -n "$back" ] || { log "$p: the version before can't be kept, nothing changed"; status "$p" error keep; return 1; }
@@ -999,9 +1021,14 @@ room_free() {
 tidy() {
   local p keep name repo run kept n seen_before
   for p in $(part_ids); do
-    case $(kind "$p") in image) keep=$KEEP ;; openmower | build) keep=$KEEP_BIG ;; *) continue ;; esac
     name=$(box "$p")
     exists "$name" || continue
+    case $(kind "$p") in
+    # (a big app, like xtech's with its 300 MB, keeps none: the mower's disk is small)
+    image) if [ "$(docker image inspect -f '{{.Size}}' "$(image_of "$name")" 2>/dev/null || echo 0)" -lt 104857600 ]; then keep=$KEEP; else keep=$KEEP_BIG; fi ;;
+    openmower | build) keep=$KEEP_BIG ;;
+    *) continue ;;
+    esac
     [ -n "$(get "pending_$p")" ] && continue
     repo=$(repo_of "$(ref_of "$name")")
     run=$(image_of "$name")

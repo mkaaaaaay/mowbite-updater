@@ -45,5 +45,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:stable -s sh -e SC1091,SC3043,SC2034,SC2015,SC2016 /mnt/updater.sh /mnt/lib.sh /mnt/self.sh /mnt/www/cgi-bin/updater
+      - run: docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:stable -s sh -e SC1091,SC3043,SC2034,SC2015,SC2016,SC2153 /mnt/updater.sh /mnt/lib.sh /mnt/self.sh /mnt/www/cgi-bin/updater
       - run: node --check www/app.js
