@@ -424,10 +424,12 @@ available() {
 # --- starting a part and seeing it run ---
 
 # a part started on what its tag says now, then seen running on the image $2 and answering (check_of), within two
-# minutes, a built one within three, OpenMower within six. 1 when compose can't start it or it doesn't answer
+# minutes, a built one within five, OpenMower within six. 1 when compose can't start it or it doesn't answer. never
+# built here: the image is there already (pulled, built or the one before), a planner with pull_policy: build would
+# be built once more and run on an image nobody checked
 restart() {
   progress "$1" restart
-  compose $T_UP "$(box "$1")" up -d --no-deps "$(service "$(box "$1")")" >> "$LOG" 2>&1 || { log "$1: compose couldn't start it"; return 1; }
+  compose $T_UP "$(box "$1")" up -d --no-deps --no-build "$(service "$(box "$1")")" >> "$LOG" 2>&1 || { log "$1: compose couldn't start it"; return 1; }
   seen "$1" "$2"
 }
 seen() {
