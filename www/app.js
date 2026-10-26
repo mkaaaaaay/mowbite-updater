@@ -114,6 +114,8 @@ const DE = {
   'left over, nothing uses it': 'übrig geblieben, nichts benutzt es',
   'not used by any container': 'von keinem Container benutzt',
   'The updater does not answer.': 'Der Updater antwortet nicht.',
+  'It updates itself too, after the automatic updates at night.': 'Er aktualisiert sich auch selbst, nach den automatischen Updates in der Nacht.',
+  'Restarting the updater, the page comes back by itself': 'Der Updater startet neu, die Seite kommt von selbst wieder',
   'Mon': 'Mo', 'Tue': 'Di', 'Wed': 'Mi', 'Thu': 'Do', 'Fri': 'Fr', 'Sat': 'Sa', 'Sun': 'So',
 };
 const german = (navigator.language || '').toLowerCase().startsWith('de');
@@ -133,9 +135,16 @@ let failed = null;
 let logOpen = false;
 let sure = null;
 let now = Date.now() / 1000;
+// its start the page was loaded with: another one (its update) loads the page again, it may have changed
+let started = null;
 
 const running = () => !!st && st.status.result === 'running';
-const busy = () => asked || (!!st && (st.requested || running()));
+// it restarts on its new version: since when, for a few minutes at most
+function restarting() {
+  const [state, t] = S('updater').split(' ');
+  return state === 'restarting' && /^\d+$/.test(t || '') && now - Number(t) < 300 ? Number(t) : null;
+}
+const busy = () => asked || (!!st && (st.requested || running() || !!restarting()));
 
 async function load() {
   try {
@@ -143,6 +152,8 @@ async function load() {
     if (!res.ok) throw new Error();
     st = await res.json();
     lost = false;
+    if (started && st.status.started && st.status.started !== started && !document.querySelector('#app :focus')) return void location.reload();
+    started = st.status.started || started;
     if (!st.requested && !running()) asked = false;
   } catch {
     lost = true;
@@ -182,7 +193,7 @@ function loop() {
 // the seconds on a bar
 setInterval(() => {
   now = Date.now() / 1000;
-  if (running()) render();
+  if (running() || restarting()) render();
 }, 1000);
 
 // --- the parts, in words ---
@@ -279,7 +290,7 @@ function runText() {
   if (r === 'running') {
     const p = progressNow();
     const parts = runParts();
-    const part = p && PARTS().find((x) => x.id === p.part);
+    const part = p && (p.part === 'updater' ? {name: 'MowBite Updater'} : PARTS().find((x) => x.id === p.part));
     if (!part || !parts.includes(p.part)) return tr('Updating right now…');
     return tr('Updating {name} ({n} of {of})…', {name: part.name, n: parts.indexOf(p.part) + 1, of: parts.length});
   }
@@ -410,6 +421,34 @@ function partCard(p) {
   );
 }
 
+// itself: the commit it runs, whether there's a newer one and updating it, the bar while it downloads and restarts
+function selfCard() {
+  if (!S('updater_running')) return null;
+  const [rev, day] = S('updater_running').split(' ');
+  const avail = S('updater_available').split(' ')[0];
+  const isNew = avail === 'yes';
+  const prog = progressNow();
+  const mine = prog && prog.part === 'updater' ? prog : null;
+  const since = restarting();
+  const tag = (S('updater_available').split(' ')[1] || '').split(':').pop() || '–';
+  const res = result({id: 'updater', kind: 'image'});
+  return h('div', {class: 'card'},
+    h('div', {class: 'head'},
+      h('span', {class: 'name'}, 'MowBite Updater'),
+      avail && BADGE[avail] && h('span', {class: 'badge' + (isNew ? ' new' : '')}, tr(BADGE[avail]))),
+    dim(tr('Runs: {what}', {what: [rev && rev !== '?' ? tr('commit {c}', {c: rev}) : tr('state unknown'), date(day)].filter(Boolean).join(' · ')})),
+    mine && bar(mine),
+    since && bar({part: 'updater', step: 'restart', pct: null, since}),
+    since && dim(tr('Restarting the updater, the page comes back by itself')),
+    h('div', {class: 'row'},
+      h('select', {class: 'control', 'aria-label': tr('Version'), disabled: true}, h('option', null, tag)),
+      h('button', {class: 'control' + (isNew ? ' primary' : ''), disabled: busy(), onclick: () => ask('self')}, tr('Update'))),
+    avail === 'local' && dim(tr('This is a version built on its own, not one from its registry. "Update" swaps it for the one from there.')),
+    PARTS().some((p) => st.conf[p.id + '_auto'] === 1) && dim(tr('It updates itself too, after the automatic updates at night.')),
+    res && dim(tr('Last time: {what}', {what: res})),
+  );
+}
+
 function scheduleCard() {
   const days = st.conf.days === 'daily' ? [] : String(st.conf.days).split(',').map(Number);
   const toggle = (d) => {
@@ -507,6 +546,7 @@ function render() {
   app.replaceChildren(
     dim(tr("Only with the mower idle in the dock. If a new version doesn't start, it goes back to the one before. Afterwards old images and the build cache are cleared away.")),
     ...PARTS().map(partCard),
+    selfCard(),
     anyAuto && scheduleCard(),
     actionsCard(),
     roomCard(),

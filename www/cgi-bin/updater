@@ -3,8 +3,9 @@
 #   GET                 settings, the parts, status, what can go and the log as json
 #   POST ?conf          lines "<key> <value>", each checked, the ones left out stay as they are: <part> (its channel:
 #                       beta or stable, OpenMower's tag), <part>_auto (0 or 1), at (HH:MM), days (daily or 1-7, commas)
-#   POST ?now[=<part>]  update all parts or one within the next minute
+#   POST ?now[=<part>]  update all parts (and itself, last) or one within the next minute
 #   POST ?back=<part>   a part from a registry back to the version before
+#   POST ?self          the updater itself to its newest version within the next minute (with ?now: last)
 #   POST ?check         look within the next minute whether there's something new
 #   POST ?room          list what can be deleted to make room
 #   POST ?free=<what>   delete img:<id> (one from that list), all (the whole list) or cache (the build cache)
@@ -64,6 +65,7 @@ POST)
   now) request "now all" ;;
   now=* | back=*) is_part "$p" && request "${QUERY_STRING%%=*} $p" ;;
   check) request check ;;
+  self) request self ;;
   room) request room ;;
   free=cache | free=all) request "free $p" ;;
   free=img:*)

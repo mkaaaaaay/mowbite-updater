@@ -79,6 +79,8 @@ id_of() { docker image inspect -f '{{.Id}}' "$1" 2>/dev/null; }
 # (a container waiting for its next restart counts as running for docker, not here)
 running() { [ "$(docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null)" = running ]; }
 day_of() { docker image inspect -f '{{.Created}}' "$1" 2>/dev/null | cut -c1-10; }
+# the commit an image was built from, as its labels say (ci's images have it), first 7
+rev_of() { docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1" 2>/dev/null | cut -c1-7; }
 digests() { docker image inspect -f '{{join .RepoDigests " "}}' "$1" 2>/dev/null; }
 # the digests the registry knows the image of a container by: its repo digests, and its id (with containerd's image
 # store that is the registry's digest itself, and an image replaced under its tag has no repo digests any more)
@@ -1094,33 +1096,82 @@ tidy() {
   log "tidied up: images ${freed:-0B}, build cache ${cache:-0B}, $(free_mb) MB free"
 }
 
+# itself, for its card: the commit it runs and from when, whether its registry has a newer one
+check_self() {
+  local img rev
+  img=$(image_of "$ME")
+  rev=$(rev_of "$img")
+  status updater_running "${rev:-?}" "$(day_of "$img")"
+  if in_compose "$ME"; then available updater "$ME" "$(ref_of "$ME")"; else status updater_available unknown none; fi
+}
+
 # itself: a helper container on the image that runs now (self.sh) recreates it on the new one, from inside compose
-# would stop this container before the new one starts. the helper sees it come up, else puts this one back
+# would stop this container before the new one starts. the helper sees it come up, else puts this one back. asked for
+# ($1 manual): with the download on the bar and a word on its card when there's nothing new. at night: quiet, and an
+# image built here stays
 update_self() {
-  local me prev new root
-  in_compose "$ME" || return
+  local me prev new root need rc was
+  if ! in_compose "$ME"; then
+    [ -n "$1" ] && log "the updater doesn't run from a compose file, it can't update itself" && status updater error compose
+    return
+  fi
   me=$(ref_of "$ME")
+  [ -z "$1" ] && built_here "$(image_of "$ME")" && return
+  need=$(need_mb "$me" "$(image_of "$ME")")
+  [ -n "$need" ] || need=$(($(docker image inspect -f '{{.Size}}' "$(image_of "$ME")" 2>/dev/null || echo 0) / 1048576))
+  if ! room_for $((need + ROOM_APP)); then
+    log "the updater: not enough room (needs $need MB and $ROOM_APP to spare, $(free_mb) MB free), it stays as it is"
+    status updater nospace "$need" "$(free_mb)"
+    return
+  fi
   # the image it runs now, kept first under a tag of its own: the helper runs on it, and it's the way back
   prev=$(repo_of "$me"):previous
-  docker tag "$(image_of "$ME")" "$prev" 2>/dev/null || { log "the updater's own image can't be kept, it doesn't update itself"; return; }
-  timeout $T_PULL docker pull -q "$me" > /dev/null 2>&1 || return
+  docker tag "$(image_of "$ME")" "$prev" 2>/dev/null || { log "the updater's own image can't be kept, it doesn't update itself"; status updater error keep; return; }
+  if [ -n "$1" ]; then
+    # (on its bar like a part, the run before keeps what it said: waiting for the dock)
+    was=$(get result)
+    status run_parts updater
+    status result running
+    progress updater prepare
+    layers "$me" > "$STATE/layers"
+    with_progress updater none pull_image "$me"
+    rc=$?
+    status progress
+    status run_parts
+    status result "${was:-done}"
+  else
+    timeout $T_PULL docker pull -q "$me" > /dev/null 2>&1
+    rc=$?
+  fi
+  if [ $rc -ne 0 ]; then
+    [ -n "$1" ] && log "the updater: its new version can't be downloaded, it stays as it is" && status updater error pull
+    return
+  fi
   new=$(id_of "$me")
-  [ "$new" = "$(id_of "$prev")" ] && return
+  if [ "$new" = "$(id_of "$prev")" ]; then
+    [ -n "$1" ] && log "the updater is up to date" && status updater current
+    check_self
+    return
+  fi
   if [ "$new" = "$(get updater_failed)" ]; then
     docker tag "$prev" "$me"
+    [ -n "$1" ] && log "the updater: not again, this version didn't start before" && status updater skipped_failed
     return
   fi
   # (all stacks: dockge may give each one a global.env next to them)
   root=$(dirname "$(label "$ME" project.working_dir)")
   log "updating the updater"
+  # (what came of it, the next start says: a new version, or this one back)
+  status updater restarting "$(now)"
   docker run -d --rm --name mowbite-updater-self -v /var/run/docker.sock:/var/run/docker.sock -v "$root:$root" -v /etc/localtime:/etc/localtime:ro \
     -e "STATE_DIR=$STATE" -e "UPDATER_CONTAINER=$ME" --entrypoint sh "$prev" /self.sh "$me" "$prev" > /dev/null 2>&1 ||
-    { log "the updater's helper didn't start, it stays as it is"; docker tag "$prev" "$me"; }
+    { log "the updater's helper didn't start, it stays as it is"; docker tag "$prev" "$me"; status updater error helper; }
 }
 
 check_all() {
   find_parts
   for p in $(part_ids); do check_part "$p"; done
+  check_self
   check_room
   status disk_free "$(free_mb)"
   status checked "$(now)"
@@ -1196,6 +1247,17 @@ mkdir -p "$STATE"
 chmod 700 "$STATE"
 serve
 log "started"
+# a new version of itself since it last started (its own update, or one by hand in dockge), or the one before back
+# when the new one didn't come up: said on its card
+# shellcheck disable=SC2046
+set -- $(get started)
+case $(get updater) in restarting*) asked_self=1 ;; *) asked_self= ;; esac
+if [ -n "$2" ] && [ "$2" != "$(image_of "$ME")" ] && [ "$2" != "$(get updater_failed)" ]; then
+  log "the updater runs its new version"
+  status updater updated "$(now)" "$(rev_of "$(image_of "$ME")")"
+elif [ -n "$asked_self" ] || { [ -n "$2" ] && [ "$2" != "$(image_of "$ME")" ]; }; then
+  status updater rolled_back "$(now)"
+fi
 status started "$(now)" "$(image_of "$ME")"
 alive
 find_parts
@@ -1213,10 +1275,16 @@ while :; do
     mv "$REQ" "$REQ.$$"
     parts=""
     check=""
+    self=""
     while read -r w a b; do
       case $w in
       check) check=1 ;;
-      now) parts="$parts $a" ;;
+      # (all: itself too, last)
+      now)
+        parts="$parts $a"
+        [ "$a" = all ] && self=1
+        ;;
+      self) self=1 ;;
       back)
         if [ "$(kind "$a")" != image ]; then
           :
@@ -1244,6 +1312,7 @@ while :; do
     elif [ -n "$check" ]; then
       check_all
     fi
+    [ -n "$self" ] && update_self manual
   fi
   # the night's run: once in its window (also past midnight, it counts as the night it started), again every 10 minutes
   # while the mower isn't in the dock

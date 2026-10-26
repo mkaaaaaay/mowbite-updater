@@ -15,6 +15,8 @@ by itself.
 - Checks that the new version really works. If not, it goes back to the old version.
 - Checks there's enough free space first and cleans up old versions afterwards.
 - Shows a progress bar while it updates.
+- Keeps itself up to date too: "Update" on its own card, or at night after the automatic updates. If its new version
+  doesn't come up, the one before starts again.
 
 ## Install
 
@@ -47,6 +49,9 @@ On its page `http://<your-mower>:8083`, or in MowBite under Settings, Updates:
 - **Automatically at night** lets it update that app by itself, at the time and on the days you pick.
 - **Back to the version before** (MowBite and other apps) if something is wrong after an update.
 - **Make room** shows old versions and leftovers you can delete. Nothing is deleted without asking.
+- **MowBite Updater** has a card of its own: "Update" there updates the updater itself.
+
+Its page looks like MowBite, in the design picked in MowBite when you open it from there.
 
 ## Add another app
 
@@ -107,8 +112,9 @@ can.
   `build`, `restart`, `wait`, `back`
 - `POST /cgi-bin/updater?conf` with lines like `openmower edge`, `mowbite stable`, `mowbite_auto 1`, `at 03:00`,
   `days daily` (or `days 1,3,5`, Monday is 1). Lines left out stay as they are
-- `POST ?now` (all apps) or `?now=<app>`, `?back=<app>`, `?check`, `?room`, `?free=img:<id>`, `?free=cache`,
-  `?free=all`
+- `POST ?now` (all apps, then itself) or `?now=<app>`, `?self` (only itself), `?back=<app>`, `?check`, `?room`,
+  `?free=img:<id>`, `?free=cache`, `?free=all`. Its own state is in `status` as `updater_running`, `updater_available`
+  and `updater`
 
 </details>
 
