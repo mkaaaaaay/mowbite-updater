@@ -17,7 +17,8 @@
 plain() { printf 'Content-Type: text/plain\r\nCache-Control: no-store\r\n\r\n%s\n' "$1"; exit 0; }
 # json string content: control characters out, backslashes and quotes escaped
 jstr() { tr -d '\000-\010\013-\037' | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/ /g'; }
-request() { mkdir -p "$STATE" && echo "$1" >> "$REQ" && plain ok; }
+# (and it's woken up: it looks at once, not within the minute)
+request() { mkdir -p "$STATE" && echo "$1" >> "$REQ" && { kill -USR1 1 2> /dev/null || :; } && plain ok; }
 is_part() { valid "$1" "$ID" && part_ids | grep -qx "$1"; }
 
 case "$REQUEST_METHOD" in

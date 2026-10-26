@@ -16,9 +16,13 @@ exists() { docker inspect "$1" > /dev/null 2>&1; }
 # itself: by its name in compose.yaml, else by its id as its own mounts show it (on the host's network its hostname is the
 # host's)
 ME=${UPDATER_CONTAINER:-mowbite-updater}
-exists "$ME" || ME=$(sed -n 's|.*/containers/\([0-9a-f]\{64\}\)/.*|\1|p' /proc/self/mountinfo 2>/dev/null | head -n1)
-
-STATE=${STATE_DIR:-$(label "$ME" project.working_dir)/.updater}
+# (its interface, asked every few seconds while its page is open, takes the folder it noted at its start: no docker)
+if [ -n "$REQUEST_METHOD" ] && [ -z "$STATE_DIR" ] && [ -s /tmp/updater-state ]; then
+  read -r STATE < /tmp/updater-state
+else
+  exists "$ME" || ME=$(sed -n 's|.*/containers/\([0-9a-f]\{64\}\)/.*|\1|p' /proc/self/mountinfo 2>/dev/null | head -n1)
+  STATE=${STATE_DIR:-$(label "$ME" project.working_dir)/.updater}
+fi
 CONF=$STATE/conf
 STATUS=$STATE/status
 LOG=$STATE/log
@@ -94,11 +98,13 @@ om_version() {
 # the channels: an image part with releases beta or stable, OpenMower edge, latest (its release) or what its .env has.
 # automatic: 1 or 0 each
 channel() { [ "$(conf "$1" beta)" = stable ] && echo stable || echo beta; }
-om_choices() { printf 'edge latest %s' "$(om_version)"; }
+# (its interface takes the version of the .env as the updater noted it at its last look, the updater reads the file)
+om_env_version() { if [ -n "$REQUEST_METHOD" ] && [ -n "$(get openmower_env)" ]; then get openmower_env; else om_version; fi; }
+om_choices() { printf 'edge latest %s' "$(om_env_version)"; }
 om_channel() {
   v=$(conf openmower "")
   case " $(om_choices) " in *" $v "*) [ -n "$v" ] && echo "$v" && return ;; esac
-  v=$(om_version)
+  v=$(om_env_version)
   echo "${v:-edge}"
 }
 auto() { [ "$(conf "$1_auto" 0)" = 1 ]; }

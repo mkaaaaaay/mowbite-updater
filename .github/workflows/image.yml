@@ -45,5 +45,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:stable -s sh -e SC1091,SC3043,SC2034,SC2015,SC2016,SC2153 /mnt/updater.sh /mnt/lib.sh /mnt/self.sh /mnt/www/cgi-bin/updater
+      - run: docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:stable -s sh -e SC1091,SC3043,SC2034,SC2015,SC2016,SC2153 /mnt/updater.sh /mnt/lib.sh /mnt/self.sh /mnt/www/cgi-bin/updater /mnt/test/run.sh
       - run: node --check www/app.js
+
+  # the updater against a made-up mower on the runner's docker: update, a version that doesn't start, the mower out,
+  # stopped halfway, picked apps, stable older, a build with pull_policy: build, itself and a broken version of itself
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker
+      - run: sh test/run.sh

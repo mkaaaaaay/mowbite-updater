@@ -92,7 +92,10 @@ Without a check it waits for Docker's own health check, or else half a minute wi
 - **Docker access:** like Dockge it needs `/var/run/docker.sock`. It changes your stacks only through their compose
   files, so Dockge shows the same.
 - **Settings and log** stay in its own stack folder (`.updater`).
-- **Stopped halfway** (power gone): at its next start it puts things back or finishes checking.
+- **Stopped halfway** (power gone): at its next start it puts things back or finishes checking. Only if the power goes
+  in the few seconds it swaps itself for its new version, it may not come back: then tap "Update" on its stack in Dockge.
+- **Tested** on every change: `test/run.sh` runs it against a made-up mower on the machine's own docker (update, a
+  version that doesn't start, the mower leaving the dock, a stop halfway, picked apps, a build, itself).
 
 <details>
 <summary>Settings (environment)</summary>

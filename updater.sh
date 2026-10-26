@@ -251,7 +251,8 @@ stable_tag() {
   local src v
   src=$(stable_source "$1")
   [ -n "$src" ] || return
-  v=$(wget -q -T 15 -O - "https://api.github.com/repos/$src/releases/latest" | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -n1)
+  # (where github sends /releases/latest, not its api: no limit of 60 an hour)
+  v=$(wget -S --spider -T 15 "https://github.com/$src/releases/latest" 2>&1 | sed -n 's|^ *Location: .*/releases/tag/v\{0,1\}\([^[:space:]?]*\).*|\1|p' | tail -n1)
   valid "$v" "$TAG" && echo "$v"
 }
 # the repository of an image reference (its tag off)
@@ -543,18 +544,52 @@ settle() {
 
 # --- an image from a registry ---
 
+# whether version $1 is older than $2 (1.3.0 before 1.4.0-beta.14 before 1.4.0): part by part, a pre-release before its
+# release. no when either isn't a version like that
+older() {
+  awk -v a="$1" -v b="$2" '
+    function cmp(x, y,   xa, ya, xp, yp, nx, ny, n, i) {
+      xp = index(x, "-") ? substr(x, index(x, "-") + 1) : ""; yp = index(y, "-") ? substr(y, index(y, "-") + 1) : ""
+      sub(/-.*/, "", x); sub(/-.*/, "", y)
+      nx = split(x, xa, "."); ny = split(y, ya, "."); n = nx > ny ? nx : ny
+      for (i = 1; i <= n; i++) if (xa[i] + 0 != ya[i] + 0) return xa[i] + 0 < ya[i] + 0 ? -1 : 1
+      if (xp == yp) return 0
+      if (xp == "") return 1
+      if (yp == "") return -1
+      nx = split(xp, xa, "."); ny = split(yp, ya, "."); n = nx > ny ? nx : ny
+      for (i = 1; i <= n; i++) {
+        if (xa[i] == ya[i]) continue
+        if (xa[i] ~ /^[0-9]+$/ && ya[i] ~ /^[0-9]+$/) return xa[i] + 0 < ya[i] + 0 ? -1 : 1
+        return xa[i] < ya[i] ? -1 : 1
+      }
+      return 0
+    }
+    BEGIN {
+      v = "^[0-9]+([.][0-9]+)*(-[0-9A-Za-z.-]+)?$"
+      exit !(a ~ v && b ~ v && cmp(a, b) < 0)
+    }'
+}
+
 check_image() {
-  local c repo target
+  local c repo target st
   c=$(box "$1")
   repo=$(repo_of "$(ref_of "$c")")
   status "$1_running" "$(version_of "$1")" "$(day_of "$(image_of "$c")")"
   if [ -n "$(stable_source "$1")" ]; then
-    if [ -n "$(stable_tag "$1")" ]; then status "$1_stable" yes; else status "$1_stable" no; fi
+    st=$(stable_tag "$1")
+    if [ -n "$st" ]; then status "$1_stable" yes; else status "$1_stable" no; fi
   else
     status "$1_stable"
   fi
   if [ -n "$(newest_back "$repo" "$(image_of "$c")")" ]; then status "$1_back" yes; else status "$1_back" no; fi
   target=$(image_target "$1")
+  # stable older than what runs (a beta after the last release): nothing to go to, it stays until a newer stable
+  if [ "$(channel "$1")" = stable ] && [ -n "$st" ] && older "$st" "$(version_of "$1")"; then
+    status "$1_available" no "$target"
+    status "$1_stable_older" "$st"
+    return
+  fi
+  status "$1_stable_older"
   if [ -n "$target" ]; then available "$1" "$c" "$target"; else status "$1_available" unknown none; fi
 }
 # what a part runs in words: MowBite's own version, else its image's tag
@@ -606,6 +641,12 @@ update_image() {
   fi
   target=$(image_target "$p")
   [ -n "$target" ] || { log "$p: no stable release"; status "$p" error no_stable; return 1; }
+  # never back to an older version by picking stable: that one stays until a newer stable is out
+  if [ "$(channel "$p")" = stable ] && older "${target##*:}" "$(version_of "$p")"; then
+    log "$p: stable ${target##*:} is older than $(version_of "$p") that runs, it stays as it is"
+    status "$p" stable_older "${target##*:}"
+    return 0
+  fi
   # room for what it has to download (its missing layers x5, else as much as the image that runs) and some to spare
   need=$(need_mb "$target" "$before")
   [ -n "$need" ] || need=$(($(docker image inspect -f '{{.Size}}' "$before" 2>/dev/null || echo 0) / 1048576))
@@ -826,7 +867,9 @@ commit_of() {
   [ -n "$src" ] || return
   # shellcheck disable=SC2086
   set -- $src
-  v=$(wget -q -T 15 -O - "https://api.github.com/repos/$1/commits/${2:-main}" | sed -n 's/^  "sha": *"\([0-9a-f]*\)".*/\1/p' | head -n1)
+  # (git's own answer, not github's api: no limit of 60 an hour)
+  v=$(wget -q -T 15 -O - "https://github.com/$1.git/info/refs?service=git-upload-pack" 2>/dev/null | tr '\000' ' ' |
+    sed -n "s/^[0-9a-f]\{4\}\([0-9a-f]\{40\}\) refs\/heads\/$(re "${2:-main}")\( .*\)\{0,1\}\$/\1/p" | head -n1)
   valid "$v" '[0-9a-f]{40}' && echo "$v"
 }
 # the commit it was last built from here, while it still runs that image
@@ -1275,12 +1318,16 @@ serve() { pidof httpd > /dev/null || httpd -p "${PORT:-8083}" -h /www; }
 # (sourced by a test for its functions)
 [ -n "$UPDATER_NO_LOOP" ] && return 0
 trap 'exit 0' TERM INT
+# (a request from its page or MowBite wakes it up at once, see the sleep at the end)
+trap ':' USR1
 if [ -z "$STATE_DIR" ] && [ -z "$(label "$ME" project.working_dir)" ]; then
   echo "MowBite Updater: it has to run from a compose file (its settings and log go next to it), see its readme" >&2
   while sleep 3600; do :; done
 fi
 mkdir -p "$STATE"
 chmod 700 "$STATE"
+# (for its interface, so it needs no docker to find its folder)
+printf '%s\n' "$STATE" > /tmp/updater-state
 serve
 log "started"
 # a new version of itself since it last started (its own update, or one by hand in dockge), or the one before back
@@ -1370,5 +1417,7 @@ while :; do
     check_all
   fi
   sleep 60 &
-  wait $!
+  nap=$!
+  wait $nap
+  kill $nap 2> /dev/null
 done

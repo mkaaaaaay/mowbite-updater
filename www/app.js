@@ -56,7 +56,7 @@ const DE = {
     'Steht der Mäher dann nicht im Leerlauf im Dock, versucht er es 3 Stunden lang alle 10 Minuten wieder. Die Uhrzeit ist die des Mähers.',
   'Check for updates': 'Auf Updates prüfen',
   'Update all': 'Alle aktualisieren',
-  'asked, within a minute…': 'angefragt, innerhalb einer Minute…',
+  'asked…': 'angefragt…',
   'Last checked {t}.': 'Zuletzt geprüft {t}.',
   '{gb} GB free on the mower.': '{gb} GB frei auf dem Mäher.',
   'No answer from the updater for a moment.': 'Der Updater antwortet gerade nicht.',
@@ -88,6 +88,7 @@ const DE = {
   'not enough room on the mower: needs about {need} MB and some to spare, {free} MB free':
     'nicht genug Platz auf dem Mäher: braucht etwa {need} MB und etwas Reserve, {free} MB frei',
   "this version didn't start before, it waits for the next one": 'diese Version ist schon einmal nicht gestartet, er wartet auf die nächste',
+  'stable {v} is older than what runs, it stays until a newer stable is out': 'Stabil {v} ist älter als die laufende Version, sie bleibt, bis es eine neuere stabile gibt',
   "the new version didn't start, it went back to the one before": 'die neue Version ist nicht gestartet, er ist auf die vorige zurückgegangen',
   "not confirmed yet: the new version didn't answer as it should while the mower wasn't idle, nothing was restarted. The next run looks again":
     'noch nicht bestätigt: Die neue Version hat nicht wie erwartet geantwortet, während der Mäher nicht im Leerlauf war, deshalb wurde nichts neu gestartet. Der nächste Lauf sieht noch einmal nach',
@@ -279,6 +280,8 @@ function result(p) {
       return tr('not enough room on the mower: needs about {need} MB and some to spare, {free} MB free', {need: rest[0] || '?', free: rest[1] || '?'});
     case 'skipped_failed':
       return tr("this version didn't start before, it waits for the next one");
+    case 'stable_older':
+      return tr('stable {v} is older than what runs, it stays until a newer stable is out', {v: rest[0] || '?'});
     case 'rolled_back':
       return tr("the new version didn't start, it went back to the one before");
     case 'unconfirmed':
@@ -448,7 +451,9 @@ function partCard(p) {
       h('input', {type: 'checkbox', checked: auto, onchange: (e) => setConf({[id + '_auto']: e.target.checked ? 1 : 0})}),
       tr('Automatically at night')),
     p.kind === 'image' && avail === 'local' && dim(tr('This is a version built on its own, not one from its registry. "Update" swaps it for the one from there.')),
-    p.kind === 'image' && st.conf[id] === 'stable' && dim(tr('Stable is the newest release without "beta". It can be older than the beta that runs now, going there leaves out what came since.')),
+    p.kind === 'image' && st.conf[id] === 'stable' && (S(id + '_stable_older')
+      ? dim(tr('stable {v} is older than what runs, it stays until a newer stable is out', {v: S(id + '_stable_older')}))
+      : dim(tr('Stable is the newest release without "beta". It can be older than the beta that runs now, going there leaves out what came since.'))),
     p.kind === 'openmower' && st.conf.openmower !== 'edge' && plannerHere &&
       h('div', {class: 'warn'}, tr("With this version the MowBite Planner doesn't work: it needs two changes that are only in edge so far (OM_PLANNER=external and keeping the planner's settings per area).")),
     p.kind === 'openmower' && auto && dim(tr("Edge changes often, an update at night can bring a new fault. Only when there's room for the old and the new image at once.")),
@@ -558,7 +563,7 @@ function actionsCard() {
   const free = /^\d+$/.test(S('disk_free')) ? Number(S('disk_free')) : null;
   const run = runText();
   const line = [
-    busy() && !run ? tr('asked, within a minute…') : run,
+    busy() && !run ? tr('asked…') : run,
     lost && tr('No answer from the updater for a moment.'),
     S('checked') && tr('Last checked {t}.', {t: when(S('checked'))}),
     free !== null && tr('{gb} GB free on the mower.', {gb: fmt(free / 1024, 1)}),
