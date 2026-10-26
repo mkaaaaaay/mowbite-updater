@@ -116,9 +116,48 @@ const DE = {
   'The updater does not answer.': 'Der Updater antwortet nicht.',
   'It updates itself too, after the automatic updates at night.': 'Er aktualisiert sich auch selbst, nach den automatischen Updates in der Nacht.',
   'Restarting the updater, the page comes back by itself': 'Der Updater startet neu, die Seite kommt von selbst wieder',
+  'Out of reach for the updater': 'Für den Updater nicht erreichbar',
+  'Add an app': 'App hinzufügen',
+  'Add': 'Hinzufügen',
+  'Pick an app': 'App auswählen',
+  'Any other app of your stacks, the updater then looks after it like the others: only with the mower idle in the dock, and back to the version before when the new one doesn\'t run for half a minute.':
+    'Jede andere App deiner Stacks, der Updater kümmert sich dann wie um die anderen: nur mit dem Mäher im Leerlauf im Dock, und zurück auf die vorige Version, wenn die neue keine halbe Minute läuft.',
+  'Every app of your stacks is in already.': 'Alle Apps deiner Stacks sind schon dabei.',
+  'Take out': 'Herausnehmen',
+  'Really take out?': 'Wirklich herausnehmen?',
+  'Picked by you.': 'Von dir hinzugefügt.',
+  'This page is shown inside another one, open it on its own to change anything:': 'Diese Seite ist in eine andere eingebettet, zum Ändern bitte direkt öffnen:',
+  '"{name}" is in {dir}. The updater only sees {reach}. Move it there, or add this line to the updater\'s "volumes:":':
+    '„{name}“ liegt in {dir}. Der Updater sieht nur {reach}. Dorthin verschieben oder diese Zeile bei den „volumes:“ des Updaters einfügen:',
+  '"{name}" runs without a compose file, the updater can\'t update it.':
+    '„{name}“ läuft ohne compose-Datei, das kann der Updater nicht aktualisieren.',
+  'The updater doesn\'t see its own folder {dir}: it forgets its settings and can\'t update itself. Add this line to its "volumes:":':
+    'Der Updater sieht seinen eigenen Ordner {dir} nicht: Er vergisst seine Einstellungen und kann sich nicht selbst aktualisieren. Diese Zeile bei seinen „volumes:“ einfügen:',
   'Mon': 'Mo', 'Tue': 'Di', 'Wed': 'Mi', 'Thu': 'Do', 'Fri': 'Fr', 'Sat': 'Sa', 'Sun': 'So',
 };
-const german = (navigator.language || '').toLowerCase().startsWith('de');
+// (MowBite passes its language on when it embeds the page)
+const QUERY = new URLSearchParams(location.search);
+const german = QUERY.get('lang') ? QUERY.get('lang') === 'de' : (navigator.language || '').toLowerCase().startsWith('de');
+const embedded = window.self !== window.top;
+// embedded by MowBite (the app, its page on this mower, or one on this computer) it can change things, embedded by any
+// other page only show them: a page somewhere else can't make one click here on something
+function parentOk() {
+  if (!embedded) return true;
+  let from = '';
+  try {
+    from = location.ancestorOrigins && location.ancestorOrigins.length ? location.ancestorOrigins[0] : new URL(document.referrer).origin;
+  } catch {
+    return false;
+  }
+  try {
+    const u = new URL(from);
+    return u.protocol === 'capacitor:' || u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === location.hostname;
+  } catch {
+    return false;
+  }
+}
+const locked = !parentOk();
+if (locked) document.documentElement.classList.add('locked');
 document.documentElement.lang = german ? 'de' : 'en';
 function tr(text, vars) {
   let t = (german && DE[text]) || text;
@@ -144,7 +183,7 @@ function restarting() {
   const [state, t] = S('updater').split(' ');
   return state === 'restarting' && /^\d+$/.test(t || '') && now - Number(t) < 300 ? Number(t) : null;
 }
-const busy = () => asked || (!!st && (st.requested || running() || !!restarting()));
+const busy = () => locked || asked || (!!st && (st.requested || running() || !!restarting()));
 
 async function load() {
   try {
@@ -162,6 +201,7 @@ async function load() {
 }
 // (as json, which only its own page and programs may send)
 async function post(query, body) {
+  if (locked) throw new Error();
   const res = await fetch(API + '?' + query, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: body || '', signal: AbortSignal.timeout(8000)});
   if (!res.ok || (await res.text()).trim() !== 'ok') throw new Error();
 }
@@ -418,6 +458,31 @@ function partCard(p) {
     p.kind === 'image' && S(id + '_back') === 'yes' &&
       h('div', {class: 'row'}, dim(tr('Something wrong since the last update?')),
         twoTaps('back:' + id, tr('Back to the version before'), tr('Really go back?'), () => ask('back=' + id))),
+    S(id + '_picked') === 'yes' &&
+      h('div', {class: 'row'}, dim(tr('Picked by you.')),
+        twoTaps('out:' + id, tr('Take out'), tr('Really take out?'), () => pick(picked().filter((c) => c !== p.container)))),
+  );
+}
+
+// the apps picked on this page (besides the known and labelled ones): changed, then looked at again at once
+const picked = () => String(st.conf.picked || 'none').split(',').filter((c) => c && c !== 'none');
+function pick(list) {
+  setConf({picked: list.length ? list.join(',') : 'none'});
+  ask('check');
+}
+let choice = '';
+function addCard() {
+  const cand = S('candidates').split(' ').filter(Boolean);
+  if (!cand.includes(choice)) choice = cand[0] || '';
+  return h('div', {class: 'card'},
+    h('span', {class: 'name'}, tr('Add an app')),
+    dim(tr('Any other app of your stacks, the updater then looks after it like the others: only with the mower idle in the dock, and back to the version before when the new one doesn\'t run for half a minute.')),
+    cand.length
+      ? h('div', {class: 'row'},
+        h('select', {class: 'control', 'aria-label': tr('Pick an app'), value: choice, onchange: (e) => (choice = e.target.value, e.target.blur())},
+          cand.map((c) => h('option', {value: c}, c))),
+        h('button', {class: 'control', disabled: busy() || !choice, onclick: () => pick([...picked(), choice])}, tr('Add')))
+      : dim(tr('Every app of your stacks is in already.')),
   );
 }
 
@@ -446,6 +511,26 @@ function selfCard() {
     avail === 'local' && dim(tr('This is a version built on its own, not one from its registry. "Update" swaps it for the one from there.')),
     PARTS().some((p) => st.conf[p.id + '_auto'] === 1) && dim(tr('It updates itself too, after the automatic updates at night.')),
     res && dim(tr('Last time: {what}', {what: res})),
+  );
+}
+
+// what it can't reach and why: a container it would look after whose stack is in a folder it doesn't have (with the
+// line that gives it to it), one not from a compose file, or its own compose file
+function awayCard() {
+  const far = S('unreachable').split(' ').filter(Boolean).map((x) => {
+    const at = x.lastIndexOf('@');
+    return {name: x.slice(0, at), dir: x.slice(at + 1)};
+  });
+  const self = S('updater_away');
+  if (!far.length && !self) return null;
+  const reach = S('reach').trim().split(' ').filter(Boolean).join(', ') || '/opt/stacks';
+  const line = (dir) => h('pre', {class: 'log'}, '      - ' + dir + ':' + dir);
+  return h('div', {class: 'card'},
+    h('span', {class: 'name'}, tr('Out of reach for the updater')),
+    self && self !== '-' && [dim(tr('The updater doesn\'t see its own folder {dir}: it forgets its settings and can\'t update itself. Add this line to its "volumes:":', {dir: self})), line(self)],
+    far.map((f) => f.dir === '-'
+      ? dim(tr('"{name}" runs without a compose file, the updater can\'t update it.', {name: f.name}))
+      : [dim(tr('"{name}" is in {dir}. The updater only sees {reach}. Move it there, or add this line to the updater\'s "volumes:":', {name: f.name, dir: f.dir, reach})), line(f.dir)]),
   );
 }
 
@@ -543,16 +628,26 @@ function render() {
   const pre = app.querySelector('pre.log');
   const scroll = pre ? pre.scrollTop : 0;
   const anyAuto = PARTS().some((p) => st.conf[p.id + '_auto'] === 1);
-  app.replaceChildren(
+  // (what isn't there this time, false or null, isn't shown)
+  app.replaceChildren(...[
+    locked && h('div', {class: 'warn'}, tr('This page is shown inside another one, open it on its own to change anything:'), ' ',
+      h('a', {href: location.origin + '/', target: '_blank', rel: 'noreferrer'}, location.origin)),
     dim(tr("Only with the mower idle in the dock. If a new version doesn't start, it goes back to the one before. Afterwards old images and the build cache are cleared away.")),
+    awayCard(),
     ...PARTS().map(partCard),
     selfCard(),
+    addCard(),
     anyAuto && scheduleCard(),
     actionsCard(),
     roomCard(),
-  );
+  ].filter(Boolean));
   const log = app.querySelector('pre.log');
   if (log) log.scrollTop = scroll;
+}
+
+// embedded: its height to MowBite, which gives the frame that height (no scrolling box in a box)
+if (embedded && window.ResizeObserver) {
+  new ResizeObserver(() => window.parent.postMessage({mowbiteUpdater: 'height', height: Math.ceil(document.body.getBoundingClientRect().height)}, '*')).observe(document.body);
 }
 
 loop();

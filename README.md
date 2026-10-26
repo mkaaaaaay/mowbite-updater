@@ -51,11 +51,18 @@ On its page `http://<your-mower>:8083`, or in MowBite under Settings, Updates:
 - **Make room** shows old versions and leftovers you can delete. Nothing is deleted without asking.
 - **MowBite Updater** has a card of its own: "Update" there updates the updater itself.
 
-Its page looks like MowBite, in the design picked in MowBite when you open it from there.
+Its page looks like MowBite, in the design picked in MowBite when you open it from there. MowBite shows this page under
+Settings, Updates, so whatever a newer updater can do shows up there without a new MowBite.
+
+An app it knows but can't reach (its stack in another folder, or not started from a compose file) is listed with the line
+that gives it the folder.
 
 ## Add another app
 
-Give the app these lines in its compose file (under its service) and deploy it again:
+On its page (or in MowBite): **Add an app**, pick it from the list of your stacks' apps and tap "Add". "Take out" on its
+card removes it again.
+
+Or give the app these lines in its compose file (under its service) and deploy it again:
 
 ```yaml
     labels:
@@ -111,7 +118,7 @@ can.
   says what it does: `<app> <step> <percent or -> <since> [<done> <of>]`, steps `prepare`, `download`, `extract`,
   `build`, `restart`, `wait`, `back`
 - `POST /cgi-bin/updater?conf` with lines like `openmower edge`, `mowbite stable`, `mowbite_auto 1`, `at 03:00`,
-  `days daily` (or `days 1,3,5`, Monday is 1). Lines left out stay as they are
+  `days daily` (or `days 1,3,5`, Monday is 1), `picked app1,app2` (or `picked none`). Lines left out stay as they are
 - `POST ?now` (all apps, then itself) or `?now=<app>`, `?self` (only itself), `?back=<app>`, `?check`, `?room`,
   `?free=img:<id>`, `?free=cache`, `?free=all`. Its own state is in `status` as `updater_running`, `updater_available`
   and `updater`

@@ -483,3 +483,44 @@ button:active:not(:disabled) {
 summary {
   cursor: pointer;
 }
+
+/* embedded in MowBite's settings: no header, footer or background of its own, the cards like MowBite's own there */
+/* (over the designs' own backgrounds) */
+html.embed,
+html.embed body {
+  min-height: 0;
+  background: transparent !important;
+  background-image: none !important;
+}
+
+.embed header,
+.embed footer {
+  display: none;
+}
+
+.embed main {
+  max-width: none;
+  padding: 0;
+}
+
+.embed .card {
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card) 60%, transparent);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.embed .name {
+  font-size: 15px;
+}
+
+/* shown in some other page: nothing to change from there */
+.locked main input,
+.locked main select,
+.locked main button {
+  pointer-events: none;
+  opacity: 0.5;
+}

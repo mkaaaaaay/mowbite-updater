@@ -2,7 +2,8 @@
 # the updater's interface, for its own page, MowBite and other apps (on the mower's address, port 8083):
 #   GET                 settings, the parts, status, what can go and the log as json
 #   POST ?conf          lines "<key> <value>", each checked, the ones left out stay as they are: <part> (its channel:
-#                       beta or stable, OpenMower's tag), <part>_auto (0 or 1), at (HH:MM), days (daily or 1-7, commas)
+#                       beta or stable, OpenMower's tag), <part>_auto (0 or 1), at (HH:MM), days (daily or 1-7, commas),
+#                       picked (containers looked after besides the known and labelled ones, commas, or none)
 #   POST ?now[=<part>]  update all parts (and itself, last) or one within the next minute
 #   POST ?back=<part>   a part from a registry back to the version before
 #   POST ?self          the updater itself to its newest version within the next minute (with ?now: last)
@@ -39,13 +40,14 @@ POST)
     tmp=$(mktemp "$CONF.XXXXXX") || plain failed
     {
       # the settings of a part not there right now (its stack down) stay
-      known=" at days "
+      known=" at days picked "
       for id in $(part_ids); do known="$known$id ${id}_auto "; done
       [ -f "$CONF" ] && while read -r k v; do
         case $known in *" $k "*) ;; *) valid "$k" '[a-z][a-z0-9_]{0,60}' && [ -n "$v" ] && echo "$k $v" ;; esac
       done < "$CONF"
       keep at '([01][0-9]|2[0-3]):[0-5][0-9]'
       keep days '(daily|[1-7](,[1-7]){0,6})'
+      keep picked '(none|[A-Za-z0-9][A-Za-z0-9_.-]{0,63}(,[A-Za-z0-9][A-Za-z0-9_.-]{0,63}){0,40})'
       for id in $(part_ids); do
         keep "${id}_auto" '(0|1)'
         if [ "$id" = openmower ]; then
@@ -78,7 +80,7 @@ POST)
 GET)
   printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
   # the settings: each part's channel and whether it updates by itself, when
-  printf '{"conf":{"at":"%s","days":"%s"' "$(conf at 03:00 | jstr)" "$(conf days daily | jstr)"
+  printf '{"conf":{"at":"%s","days":"%s","picked":"%s"' "$(conf at 03:00 | jstr)" "$(conf days daily | jstr)" "$(conf picked none | jstr)"
   for id in $(part_ids); do
     if [ "$id" = openmower ]; then ch=$(om_channel); else ch=$(channel "$id"); fi
     printf ',"%s":"%s","%s_auto":%s' "$id" "$(echo "$ch" | jstr)" "$id" "$(conf "${id}_auto" 0 | grep -x '[01]' || echo 0)"

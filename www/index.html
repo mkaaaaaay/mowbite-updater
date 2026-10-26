@@ -17,6 +17,8 @@
   } catch (e) {}
   if (all.indexOf(t) < 0) t = 'frost';
   if (t !== 'auto') document.documentElement.setAttribute('data-theme', t);
+  // embedded in MowBite's settings: only its cards, MowBite's language
+  if (new URLSearchParams(location.search).get('embed')) document.documentElement.classList.add('embed');
 })();
 </script>
 </head>

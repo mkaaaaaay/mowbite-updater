@@ -132,12 +132,19 @@ kind_of() {
     echo image
   fi
 }
+# a running container it would look after but can't reach: "<container>@<its stack's folder>" (- when it wasn't
+# started from a compose file), for its page to say why it's missing
+away() { running "$1" && printf ' %s@%s' "$1" "$(label "$1" project.working_dir | grep . || echo -)"; }
+# the folders it reaches, as mounted into it (the stacks' folder, by default /opt/stacks)
+reach() { docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$ME" 2>/dev/null | tr ' ' '\n' | grep -vE '^(/var/run/docker\.sock|/etc/localtime|/host/.*|)$' | tr '\n' ' '; }
 find_parts() {
-  local out="" c id
+  local out="" c x id far="" picked cand
   if exists "$OM" && in_compose "$OM"; then
     out="openmower:$OM:openmower"
   elif new_os; then
     out="openmower:-:os"
+  elif exists "$OM"; then
+    far="$far$(away "$OM")"
   fi
   status openmower_name OpenMower
   status openmower_gate mower
@@ -149,30 +156,52 @@ find_parts() {
     *) continue ;;
     esac
     case " $out " in *" $id:"*) continue ;; esac
-    in_compose "$c" || continue
+    in_compose "$c" || { far="$far$(away "$c")"; continue; }
     out="$out $id:$c:image"
     status "${id}_gate" mower
   done
   status xtechapp_name "OpenMower App (xtech)"
   status openmowerapp_name OpenMowerApp
   for c in "$APP" "$PLANNER"; do
-    exists "$c" && in_compose "$c" || continue
+    exists "$c" || continue
+    in_compose "$c" || { far="$far$(away "$c")"; continue; }
     if [ "$c" = "$APP" ]; then id=mowbite; else id=planner; fi
     out="$out $id:$c:$(kind_of "$c")"
     status "${id}_gate" mower
   done
   status mowbite_name MowBite
   status planner_name "MowBite Planner"
-  for c in $(docker ps -a --filter "label=$L=on" --format '{{.Names}}'); do
+  # the apps labelled mowbite.update=on, and the ones picked on its page (conf picked). (picked ones said anew each time)
+  picked=" $(conf picked none | tr ',' ' ') "
+  sed -n 's/^\(c_[a-z0-9_]*_picked\) .*/\1/p' "$STATUS" 2>/dev/null | while read -r x; do status "$x"; done
+  for c in $({
+    docker ps -a --filter "label=$L=on" --format '{{.Names}}'
+    for x in $picked; do exists "$x" && echo "$x"; done
+  } | awk '!seen[$0]++'); do
     case $c in "$OM" | "$APP" | "$PLANNER" | "$ME") continue ;; esac
-    in_compose "$c" || continue
+    in_compose "$c" || { far="$far$(away "$c")"; continue; }
     id=c_$(echo "$c" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '_' | cut -c1-30)_$(printf '%s' "$c" | md5sum | cut -c1-4)
     out="$out $id:$c:$(kind_of "$c")"
     status "${id}_name" "$(own "$c" name | tr -d '\n' | cut -c1-40 | grep . || echo "$c")"
     if [ "$(own "$c" gate)" = none ]; then status "${id}_gate" none; else status "${id}_gate" mower; fi
+    # (picked, not labelled: it can be taken out on its page again)
+    case $picked in *" $c "*) [ "$(docker inspect -f "{{index .Config.Labels \"$L\"}}" "$c" 2>/dev/null)" = on ] || status "${id}_picked" yes ;; *) status "${id}_picked" ;; esac
+  done
+  # what can be picked: the other running containers of the stacks it reaches
+  cand=""
+  for c in $(docker ps --format '{{.Names}}'); do
+    case " $out " in *":$c:"*) continue ;; esac
+    case $c in "$ME" | mowbite-updater-self) continue ;; esac
+    in_compose "$c" && cand="$cand $c"
   done
   # shellcheck disable=SC2086
   status parts $out
+  # shellcheck disable=SC2086
+  status unreachable $far
+  # shellcheck disable=SC2086
+  status candidates $cand
+  # shellcheck disable=SC2046
+  status reach $(reach)
 }
 # only while the mower is idle in the dock (gate mower), or whenever (gate none: mowbite.update.gate=none)
 gate() { [ "$(get "$1_gate")" = none ] && echo none || echo mower; }
@@ -1102,7 +1131,14 @@ check_self() {
   img=$(image_of "$ME")
   rev=$(rev_of "$img")
   status updater_running "${rev:-?}" "$(day_of "$img")"
-  if in_compose "$ME"; then available updater "$ME" "$(ref_of "$ME")"; else status updater_available unknown none; fi
+  if in_compose "$ME"; then
+    available updater "$ME" "$(ref_of "$ME")"
+    status updater_away
+  else
+    status updater_available unknown none
+    # (its own compose file out of reach: no settings kept, no update of itself)
+    status updater_away "$(label "$ME" project.working_dir | grep . || echo -)"
+  fi
 }
 
 # itself: a helper container on the image that runs now (self.sh) recreates it on the new one, from inside compose
@@ -1259,6 +1295,8 @@ elif [ -n "$asked_self" ] || { [ -n "$2" ] && [ "$2" != "$(image_of "$ME")" ]; }
   status updater rolled_back "$(now)"
 fi
 status started "$(now)" "$(image_of "$ME")"
+# (its page can be embedded, in MowBite's settings)
+status embed 1
 alive
 find_parts
 recover
