@@ -7,6 +7,11 @@ services:
     restart: unless-stopped
     # on the mower's own network: its page on the mower's address, the mower's mqtt broker on localhost
     network_mode: host
+    # its log in docker kept small, the mower's disk is
+    logging:
+      options:
+        max-size: 1m
+        max-file: "2"
     # all optional
     # environment:
     #   PORT: "8083"
