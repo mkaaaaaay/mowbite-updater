@@ -1,6 +1,6 @@
 # MowBite Updater
 
-Keeps the apps on your OpenMower mower up to date: **OpenMower**, **MowBite**, the **MowBite Planner** and any other
+Keeps the apps on your OpenMower up to date: **OpenMower**, **MowBite**, the **MowBite Planner** and any other
 app you add.
 
 It only updates while the mower is **idle in its dock**. If a new version doesn't work, it **goes back to the old one**
