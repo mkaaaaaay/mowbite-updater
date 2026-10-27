@@ -278,6 +278,30 @@ if docker compose -f "$STACKS/build/compose.yaml" up -d > /dev/null 2>&1; then
   r=$(val "s.get('$BUILD')")
   case $r in updated*) ok "updated without going back" ;; *) bad "build: $r" ;; esac
   runs_on mbt-build mbt-build:edge && ok "runs the image it checked" || bad "runs another image than its tag"
+
+  say "built again with the same content"
+  # (what it built last forgotten: it builds again, the same as what runs, which only gets another id)
+  docker exec mbt-updater sh -c ". /lib.sh; status ${BUILD}_built; status $BUILD"
+  ran=$(docker inspect -f '{{.Image}} {{.State.StartedAt}}' mbt-build)
+  post "now=$BUILD" > /dev/null
+  until_true "s.get('$BUILD') and s.get('result') != 'running'" 600
+  r=$(val "s.get('$BUILD')")
+  case $r in updated*) ok "updated without going back" ;; *) bad "same content: $r" ;; esac
+  [ "$(docker inspect -f '{{.Image}} {{.State.StartedAt}}' mbt-build)" = "$ran" ] && ok "not started again" || bad "started again"
+  [ "$(log_has 'the same image as before')" = True ] && ok "its log says so" || bad "its log doesn't say the same image"
+
+  say "the image it runs gone"
+  # built again by hand: its tag goes on to the same content with another id, docker drops the one the container runs
+  docker compose -f "$STACKS/build/compose.yaml" build > /dev/null 2>&1
+  docker image inspect "$(docker inspect -f '{{.Image}}' mbt-build)" > /dev/null 2>&1 && echo "   (this docker kept the image, the case runs as a plain one)"
+  docker exec mbt-updater sh -c ". /lib.sh; status ${BUILD}_built; status ${BUILD}_image; status $BUILD"
+  post "now=$BUILD" > /dev/null
+  until_true "s.get('$BUILD') and s.get('result') != 'running'" 600
+  r=$(val "s.get('$BUILD')")
+  case $r in updated*) ok "updated, its tag as the way back" ;; *) bad "image gone: $r" ;; esac
+  docker image inspect "$(docker inspect -f '{{.Image}}' mbt-build)" > /dev/null 2>&1 && ok "runs on an image that's there" ||
+    bad "still on an image that's gone"
+  runs_on mbt-build mbt-build:edge && ok "the one its tag names" || bad "runs another image than its tag"
 else
   bad "the build stack doesn't come up (github?)"
 fi

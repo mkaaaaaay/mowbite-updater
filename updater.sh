@@ -85,6 +85,13 @@ digests() { docker image inspect -f '{{join .RepoDigests " "}}' "$1" 2>/dev/null
 # the digests the registry knows the image of a container by: its repo digests, and its id (with containerd's image
 # store that is the registry's digest itself, and an image replaced under its tag has no repo digests any more)
 known_as() { printf '%s @%s' "$(digests "$1")" "$1"; }
+# the same content: the same layers and settings (built again, an image gets another id, its record of the build differs)
+same() {
+  local a
+  [ "$1" = "$2" ] && return 0
+  a=$(docker image inspect -f '{{json .RootFS.Layers}} {{json .Config}}' "$1" 2>/dev/null) || return 1
+  [ -n "$a" ] && [ "$a" = "$(docker image inspect -f '{{json .RootFS.Layers}} {{json .Config}}' "$2" 2>/dev/null)" ]
+}
 # a registry's digest of image:tag, empty when it can't be had
 remote_digest() { timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}' 2>/dev/null; }
 # an image built or loaded here, one its registry doesn't have: it can't be downloaded again. (with containerd's image
@@ -461,8 +468,11 @@ available() {
 # built here: the image is there already (pulled, built or the one before), a planner with pull_policy: build would
 # be built once more and run on an image nobody checked
 restart() {
+  local force=
   progress "$1" restart
-  compose $T_UP "$(box "$1")" up -d --no-deps --no-build "$(service "$(box "$1")")" >> "$LOG" 2>&1 || { log "$1: compose couldn't start it"; return 1; }
+  # (one that runs an image that isn't there any more is made anew: compose takes it for the same and leaves it)
+  docker image inspect "$(image_of "$(box "$1")")" > /dev/null 2>&1 || force=1
+  compose $T_UP "$(box "$1")" up -d --no-deps --no-build ${force:+--force-recreate} "$(service "$(box "$1")")" >> "$LOG" 2>&1 || { log "$1: compose couldn't start it"; return 1; }
   seen "$1" "$2"
 }
 seen() {
@@ -893,7 +903,7 @@ base_same() {
 # built again from its own context and started. never --pull, and only when the image it's built on is here (for the
 # planner: OpenMower's, it has to be built on the one that runs, a missing one would come down whole)
 build() {
-  local p="$1" c base commit img before back rc built
+  local p="$1" c base commit img before ran back rc built
   c=$(box "$p")
   progress "$p" prepare
   base=$(base_of "$c")
@@ -906,6 +916,13 @@ build() {
   commit=$(commit_of "$p")
   img=$(ref_of "$c")
   before=$(image_of "$c")
+  ran=$before
+  # an image that ran and isn't there any more (built again with the same content, its tag went on and docker dropped
+  # it while it ran): the one its tag names is the way back, the same a restart would run
+  if ! docker image inspect "$before" > /dev/null 2>&1; then
+    before=$(id_of "$img")
+    [ -n "$before" ] && log "$p: the image it runs isn't there any more, the one its tag names is the way back"
+  fi
   back=$(keep_back "$(repo_of "$img")" "$before")
   [ -n "$back" ] || { log "$p: the version before can't be kept, not built"; status "$p" error keep; return 1; }
   log "$p: kept the version before as $back, building ($2)"
@@ -924,9 +941,11 @@ build() {
     return 1
   fi
   built=$(id_of "$img")
-  if [ "$built" = "$before" ]; then
-    # the same image again: nothing to restart
+  if [ "$before" = "$ran" ] && same "$built" "$before"; then
+    # the same image again (built again it only has another record of its build): nothing to restart, compose would
+    # leave it anyway. the tag stays on the one that runs, so that one stays there
     log "$p: the same image as before, it keeps running"
+    docker tag "$before" "$img"
     docker rmi "$back" > /dev/null 2>&1
   else
     status "pending_$p" "$back" "$img" "$built" "$commit"
