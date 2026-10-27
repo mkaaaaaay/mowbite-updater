@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    # (only the readme, the license or this workflow: no new image, every updater would update to the same)
+    paths-ignore: ['README.md', 'LICENSE', '.github/**']
   workflow_dispatch:
 
 permissions:

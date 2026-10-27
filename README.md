@@ -8,13 +8,14 @@ by itself.
 
 ## What it does
 
-- Shows each app's version and whether a new one is out.
-- Updates an app when you tap "Update". Or by itself at night, if you switch that on. Out of the box, nothing updates
-  by itself.
+- Shows each app's version and whether a new one is out. It looks every 6 hours, "Check for updates" looks right away.
+- Updates an app right away when you tap "Update", with the newest version even if the page doesn't show it yet. Or by
+  itself at night, if you switch that on. Out of the box, nothing updates by itself.
 - Waits until the mower is idle in the dock, and stops if the mower drives off.
 - Checks that the new version really works. If not, it goes back to the old version.
 - Checks there's enough free space first and cleans up old versions afterwards.
-- Shows a progress bar while it updates.
+- Shows what it does from the moment you tap: a progress bar while it gets ready, downloads and restarts an app, and
+  while it checks for updates.
 - Keeps itself up to date too: "Update" on its own card, or at night after the automatic updates. If its new version
   doesn't come up, the one before starts again.
 
@@ -87,6 +88,8 @@ Without a check it waits for Docker's own health check, or else half a minute wi
   OpenMower container. The MowBite Planner needs edge for now, the page warns you.
 - **OpenMowerOS 3:** there OpenMower updates with the system (`openmower update-os`). The updater leaves OpenMower alone
   and keeps the other apps up to date.
+- **Apps built from GitHub** (like the MowBite Planner): built again when GitHub has something new. A build that
+  changes nothing doesn't restart the app.
 - **Your stacks folder:** it works on the stacks in `/opt/stacks` (Dockge's folder). If yours are somewhere else, change
   both sides of that line in `compose.yaml`.
 - **Docker access:** like Dockge it needs `/var/run/docker.sock`. It changes your stacks only through their compose
@@ -94,8 +97,9 @@ Without a check it waits for Docker's own health check, or else half a minute wi
 - **Settings and log** stay in its own stack folder (`.updater`).
 - **Stopped halfway** (power gone): at its next start it puts things back or finishes checking. Only if the power goes
   in the few seconds it swaps itself for its new version, it may not come back: then tap "Update" on its stack in Dockge.
-- **Tested** on every change: `test/run.sh` runs it against a made-up mower on the machine's own docker (update, a
-  version that doesn't start, the mower leaving the dock, a stop halfway, picked apps, a build, itself).
+- **Tested** on every change, and a new version only goes out when all tests pass: `test/run.sh` runs it against a
+  made-up mower on the machine's own docker (update, a version that doesn't start, the mower leaving the dock, a stop
+  halfway, a request while it checks, picked apps, builds, itself).
 
 <details>
 <summary>Settings (environment)</summary>
