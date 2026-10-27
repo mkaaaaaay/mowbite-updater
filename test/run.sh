@@ -67,6 +67,8 @@ cleanup() {
   docker rm -f mowbite-updater-self > /dev/null 2>&1
   docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "^($REG/)?mbt-" | xargs -r docker rmi -f > /dev/null 2>&1
   docker network ls -q --filter name=mbt | xargs -r docker network rm > /dev/null 2>&1
+  # (its folder in the stack is root's, the updater runs as root)
+  [ -z "${MBT_WORK:-}" ] && docker run --rm -v "$WORK:/work" busybox:1.37-musl rm -rf /work/stacks > /dev/null 2>&1
   [ -z "${MBT_WORK:-}" ] && rm -rf "$WORK"
 }
 trap cleanup EXIT INT TERM
@@ -194,6 +196,15 @@ t0=$(date +%s)
 post check > /dev/null
 until_true "not d.get('requested')" 15 && ok "a request is taken at once ($(($(date +%s) - t0)) s)" || bad "a request waited longer than 15 s"
 until_true "int(s.get('checked', 0)) >= $t0" 120 || bad "the look asked for didn't happen"
+# one while it looks goes first (not after the look and a minute's sleep): the look stops for it and is done again
+t1=$(date +%s)
+post check > /dev/null
+sleep 2
+post room > /dev/null
+t2=$(date +%s)
+until_true "not d.get('requested')" 10 && ok "a request while it looks is taken at once ($(($(date +%s) - t2)) s)" || bad "a request while it looks waited"
+until_true "int(s.get('checked', 0)) >= $t1 and not s.get('looking') and not s.get('taken')" 180 && ok "the look done again after it" ||
+  bad "the look wasn't done again: checked $(val "s.get('checked')"), looking $(val "s.get('looking')"), taken $(val "s.get('taken')")"
 
 say "what it finds"
 [ -n "$APP" ] && ok "the labelled app ($APP)" || bad "the labelled app isn't a part"
@@ -205,8 +216,11 @@ case $un in *"mbt-loose@-"*) ok "the app without a compose file too" ;; *) bad "
 say "update"
 publish v2
 post "now=$APP" > /dev/null
+until_true "'now:$APP' in s.get('taken', '') or s.get('result') == 'running'" 10 && ok "its page knows at once it's on it" ||
+  bad "nothing for its page: taken $(val "s.get('taken')"), result $(val "s.get('result')")"
 until_true "s.get('$APP', '').startswith('updated') and s.get('result') != 'running'" 180 && runs_on mbt-app "$REG/mbt-app:v2" &&
   ok "v1 -> v2" || bad "not updated: $(val "s.get('$APP')"), runs $(docker inspect -f '{{.Image}}' mbt-app)"
+[ "$(val "s.get('${APP}_available', '').split(' ')[0]")" = no ] && ok "its card says up to date right away" || bad "still new: $(val "s.get('${APP}_available')")"
 
 say "a version that doesn't start"
 publish broken
@@ -224,6 +238,7 @@ mower out
 sleep 3
 post "now=$APP" > /dev/null
 until_true "s.get('result') == 'waiting'" 60 && runs_on mbt-app "$REG/mbt-app:v2" && ok "it waits, nothing changed" || bad "it didn't wait: $(val "s.get('result')")"
+[ "$(val "s.get('$APP')")" = "error not_docked" ] && ok "its card says why" || bad "its card says: $(val "s.get('$APP')")"
 mower docked
 sleep 3
 

@@ -119,7 +119,9 @@ can.
 
 - `GET /cgi-bin/updater`: settings, apps, status, what can go and the log as JSON. While it updates, `status.progress`
   says what it does: `<app> <step> <percent or -> <since> [<done> <of>]`, steps `prepare`, `download`, `extract`,
-  `build`, `restart`, `wait`, `back`
+  `build`, `restart`, `wait`, `back`. `requested` is true while a request waits for it, `status.taken`
+  (`<since> now:<app> self back:<app> ...`) from when it takes one until its run shows, `status.looking` (`<since>`)
+  while it looks for updates
 - `POST /cgi-bin/updater?conf` with lines like `openmower edge`, `mowbite stable`, `mowbite_auto 1`, `at 03:00`,
   `days daily` (or `days 1,3,5`, Monday is 1), `picked app1,app2` (or `picked none`). Lines left out stay as they are
 - `POST ?now` (all apps, then itself) or `?now=<app>`, `?self` (only itself), `?back=<app>`, `?check`, `?room`,

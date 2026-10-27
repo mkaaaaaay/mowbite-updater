@@ -416,7 +416,8 @@ layers() {
 }
 
 # the MB the newest image of ref needs that the local image doesn't have yet: its missing layers, packed size x5.
-# nothing when any of it can't be had: then there's no telling, and that's no room
+# nothing when any of it can't be had: then there's no telling, and that's no room. its layers from the file $3 when
+# they were just looked up
 need_mb() {
   have=$(docker image inspect -f '{{range .RootFS.Layers}}{{.}} {{end}}' "$2" 2>/dev/null)
   ids=$(mktemp)
@@ -424,7 +425,7 @@ need_mb() {
   # (an image for one platform only has no list of platforms to pick from)
   { timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format "{{json (index .Image \"linux/$(arch)\").RootFS.DiffIDs}}" 2>/dev/null ||
     timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format '{{json .Image.RootFS.DiffIDs}}' 2>/dev/null; } | tr -d '[]" ' | tr ',' '\n' | grep . > "$ids"
-  layers "$1" | cut -d' ' -f2 > "$sizes"
+  if [ -s "${3:-}" ]; then cut -d' ' -f2 "$3"; else layers "$1" | cut -d' ' -f2; fi > "$sizes"
   if [ -s "$ids" ] && [ "$(wc -l < "$ids")" -eq "$(wc -l < "$sizes")" ]; then
     paste -d' ' "$ids" "$sizes" | awk -v have=" $have " '{ if (index(have, " " $1 " ") == 0) s += $2 } END { printf "%d\n", s * 5 / 1048576 }'
   fi
@@ -634,7 +635,8 @@ update_image() {
   current=$(ref_of "$c")
   repo=$(repo_of "$current")
   before=$(image_of "$c")
-  if built_here "$before" && [ -z "$MANUAL" ]; then
+  # (asked for, it's the same either way: no need to ask the registry)
+  if [ -z "$MANUAL" ] && built_here "$before"; then
     log "$p: runs an image built here, left as it is (only updated when asked)"
     status "$p" local
     return 0
@@ -647,14 +649,15 @@ update_image() {
     status "$p" stable_older "${target##*:}"
     return 0
   fi
-  # room for what it has to download (its missing layers x5, else as much as the image that runs) and some to spare
-  need=$(need_mb "$target" "$before")
+  # room for what it has to download (its missing layers x5, else as much as the image that runs) and some to spare.
+  # (the layers looked up once: for the room and the bar)
+  layers "$target" > "$STATE/layers"
+  need=$(need_mb "$target" "$before" "$STATE/layers")
   [ -n "$need" ] || need=$(($(docker image inspect -f '{{.Size}}' "$before" 2>/dev/null || echo 0) / 1048576))
   room_for $((need + ROOM_APP)) || { log "$p: not enough room (needs $need MB and $ROOM_APP to spare, $(free_mb) MB free), nothing changed"; status "$p" nospace "$need" "$(free_mb)"; return 1; }
   # kept before anything moves its tag (an image only built here is gone once its tag is on another one)
   back=$(keep_back "$repo" "$before")
   [ -n "$back" ] || { log "$p: the version before can't be kept, nothing changed"; status "$p" error keep; return 1; }
-  layers "$target" > "$STATE/layers"
   with_progress "$p" "$(gate "$p")" pull_image "$target"
   case $? in
   0) ;;
@@ -665,6 +668,8 @@ update_image() {
   if [ "$pulled" = "$before" ] && [ "$target" = "$current" ]; then
     undo_back "$back" "$current"
     status "$p" current
+    # (its card right away, not only after the next look)
+    status "${p}_available" no "$target"
     return 0
   fi
   if [ "$pulled" = "$(get "${p}_failed")" ]; then
@@ -708,6 +713,7 @@ update_image() {
     keep_change "$p"
     status "pending_$p"
     status "$p" updated "$(now)" "$v"
+    status "${p}_available" no "$target"
     return 0
   fi
   go_back "$p" "$back" "$current" "$pulled"
@@ -780,7 +786,7 @@ update_openmower() {
   repo=$(repo_of "$ref")
   before=$(image_of "$OM")
   # a build of its own can't be downloaded again: never replaced by itself
-  if built_here "$before" && [ -z "$MANUAL" ]; then
+  if [ -z "$MANUAL" ] && built_here "$before"; then
     log "openmower: runs an image built here, left as it is (only updated when asked)"
     status openmower local
     return 0
@@ -793,11 +799,14 @@ update_openmower() {
   [ -n "$remote" ] || { log "openmower: can't reach the registry for $target"; status openmower error registry; return 1; }
   if [ "$target" = "$ref" ] && known_as "$before" | grep -q "@$remote"; then
     status openmower current
+    status openmower_available no "$target"
     return 0
   fi
   [ "$remote" = "$(get openmower_failed)" ] && { log "openmower: not again, $target didn't come up before"; status openmower skipped_failed; return 0; }
   [ "$want" != edge ] && exists "$PLANNER" && log "openmower: $want has no OM_PLANNER=external, the MowBite Planner won't work with it"
-  need=$(need_mb "$target" "$before")
+  # (the layers looked up once: for the room and the bar)
+  layers "$target" > "$STATE/layers"
+  need=$(need_mb "$target" "$before" "$STATE/layers")
   free=$(free_mb)
   if [ -z "$need" ] || [ -z "$free" ] || [ $((need + 1024)) -gt "$free" ]; then
     log "openmower: not enough room for $target (needs ${need:-?} MB and 1 GB to spare, ${free:-?} MB free), it stays as it is"
@@ -815,7 +824,6 @@ update_openmower() {
   fi
   log "openmower: $ref -> $target (needs $need MB, $free MB free)"
   # only OpenMower itself: the stack's other containers (its app, the broker) stay as they are
-  layers "$target" > "$STATE/layers"
   with_progress openmower mower compose $T_PULL "$OM" --progress json pull "$(service "$OM")"
   rc=$?
   # the last word before it restarts
@@ -839,6 +847,7 @@ update_openmower() {
     keep_change openmower
     status pending_openmower
     status openmower updated "$(now)" "$want"
+    status openmower_available no "$target"
     # what's built on OpenMower's image: again on the new one
     rc=0
     for p in $(part_ids); do
@@ -929,6 +938,7 @@ build() {
   status "$1_built" "$commit"
   [ -n "$base" ] && status "$1_base_id" "$(id_of "$base")"
   status "$p" updated "$(now)" "$(echo "$commit" | cut -c1-7)"
+  [ -n "$commit" ] && status "${p}_available" no main
   return 0
 }
 
@@ -1196,7 +1206,17 @@ update_self() {
   fi
   me=$(ref_of "$ME")
   [ -z "$1" ] && built_here "$(image_of "$ME")" && return
-  need=$(need_mb "$me" "$(image_of "$ME")")
+  # (asked for after the apps: its card shows it's on it)
+  [ -n "$1" ] && [ -z "$(get taken)" ] && status taken "$(now)" self
+  # the helper of its update a moment ago may still see it come up, with :previous as its way back: that one first.
+  # (one that ended and stayed is cleared away, a running one can't be)
+  if docker container inspect mowbite-updater-self > /dev/null 2>&1; then
+    timeout 300 docker wait mowbite-updater-self > /dev/null 2>&1
+    docker rm mowbite-updater-self > /dev/null 2>&1
+  fi
+  # (the layers looked up once: for the room and the bar)
+  layers "$me" > "$STATE/layers"
+  need=$(need_mb "$me" "$(image_of "$ME")" "$STATE/layers")
   [ -n "$need" ] || need=$(($(docker image inspect -f '{{.Size}}' "$(image_of "$ME")" 2>/dev/null || echo 0) / 1048576))
   if ! room_for $((need + ROOM_APP)); then
     log "the updater: not enough room (needs $need MB and $ROOM_APP to spare, $(free_mb) MB free), it stays as it is"
@@ -1211,8 +1231,8 @@ update_self() {
     was=$(get result)
     status run_parts updater
     status result running
+    status taken
     progress updater prepare
-    layers "$me" > "$STATE/layers"
     with_progress updater none pull_image "$me"
     rc=$?
     status progress
@@ -1247,19 +1267,33 @@ update_self() {
     { log "the updater's helper didn't start, it stays as it is"; docker tag "$prev" "$me"; status updater error helper; }
 }
 
+# (a request from its page or MowBite is waiting)
+asked() { [ -s "$REQ" ]; }
+# the look whether there's something new, for its page while it lasts (looking). a request that comes in meanwhile
+# goes first: the look stops before its next step and is done again after it (half)
 check_all() {
+  half=1
+  asked && return 0
+  status looking "$(now)"
   find_parts
-  for p in $(part_ids); do check_part "$p"; done
-  check_self
-  check_room
-  status disk_free "$(free_mb)"
-  status checked "$(now)"
+  for p in $(part_ids); do
+    asked && break
+    check_part "$p"
+  done
+  asked || check_self
+  if ! asked; then
+    check_room
+    status disk_free "$(free_mb)"
+    status checked "$(now)"
+    half=
+  fi
+  status looking
 }
 
 # the parts asked for (all: every one), OpenMower first (builds start from it), the rest in their order. the ones that
 # wait for the dock only with the mower idle there, asked before each again. 2 when one had to wait for that
 run() {
-  local why="$1" parts="" p waited
+  local why="$1" parts="" p waited was
   shift
   find_parts
   for p in $(part_ids); do
@@ -1268,29 +1302,39 @@ run() {
   # shellcheck disable=SC2086
   status run_parts $parts
   status result running
+  # (from here its page shows the run)
+  status taken
   # (one restarted before and not seen running yet comes first)
   docked && settle
   MANUAL=
   [ "$why" = request ] && MANUAL=1
   waited=
   for p in $parts; do
+    # (asked for: a part left as it was says why on its card)
     if [ "$(gate "$p")" = mower ] && ! docked; then
       waited=1
+      [ -n "$MANUAL" ] && status "$p" error not_docked
       continue
     fi
+    was=$(get "$p")
     update_part "$p"
-    [ $? -eq 2 ] && waited=1
+    if [ $? -eq 2 ]; then
+      waited=1
+      [ -n "$MANUAL" ] && [ "$(get "$p")" = "$was" ] && status "$p" error not_docked
+    fi
   done
   status progress
-  tidy
-  check_all
   status run_parts
+  # (for its page the run ends here: the leftovers and the look afterwards are no part of it)
   if [ -n "$waited" ]; then
     log "waiting ($why): the mower isn't idle in the dock, the rest another time"
     status result waiting
-    return 2
+  else
+    status result "done"
   fi
-  status result "done"
+  tidy
+  check_all
+  [ -z "$waited" ] || return 2
 }
 
 # the parts set to update by themselves
@@ -1338,12 +1382,17 @@ case $(get updater) in restarting*) asked_self=1 ;; *) asked_self= ;; esac
 if [ -n "$2" ] && [ "$2" != "$(image_of "$ME")" ] && [ "$2" != "$(get updater_failed)" ]; then
   log "the updater runs its new version"
   status updater updated "$(now)" "$(rev_of "$(image_of "$ME")")"
+  # (its card right away, not only after its first look)
+  status updater_available no "$(ref_of "$ME")"
 elif [ -n "$asked_self" ] || { [ -n "$2" ] && [ "$2" != "$(image_of "$ME")" ]; }; then
   status updater rolled_back "$(now)"
 fi
 status started "$(now)" "$(image_of "$ME")"
 # (its page can be embedded, in MowBite's settings)
 status embed 1
+# (what a stop halfway left of a request or a look)
+status taken
+status looking
 alive
 find_parts
 recover
@@ -1353,11 +1402,21 @@ next=0
 while :; do
   serve
   alive
+  taken=
+  if asked; then
+    # taken away first: what comes in meanwhile waits for the next round. its page knows at once that it's on it
+    if mv "$REQ" "$REQ.$$"; then
+      taken=1
+      stuck=
+      # shellcheck disable=SC2046
+      status taken "$(now)" $(cut -d' ' -f1,2 "$REQ.$$" | tr ' ' ':')
+    else
+      stuck=1
+    fi
+  fi
   # the mower right now, for its page
   status mower "$(mower)"
-  if [ -s "$REQ" ]; then
-    # taken away first: what comes in meanwhile waits for the next round
-    mv "$REQ" "$REQ.$$"
+  if [ -n "$taken" ]; then
     parts=""
     check=""
     self=""
@@ -1376,11 +1435,12 @@ while :; do
         elif [ "$(gate "$a")" = none ] || docked; then
           status run_parts "$a"
           status result running
+          status taken
           back_image "$a"
           status progress
           status run_parts
-          check_all
           status result "done"
+          check_all
         else
           log "$a: not back to the version before, the mower isn't idle in the dock"
           status "$a" error not_docked
@@ -1398,7 +1458,11 @@ while :; do
       check_all
     fi
     [ -n "$self" ] && update_self manual
+    status taken
   fi
+  # a request that came in while it was busy: at once, before the night's run or a look, its wake-up came while
+  # nothing slept (one it can't take: next round, as before)
+  [ -z "$stuck" ] && asked && continue
   # the night's run: once in its window (also past midnight, it counts as the night it started), again every 10 minutes
   # while the mower isn't in the dock
   parts=$(auto_parts)
@@ -1413,9 +1477,11 @@ while :; do
       done_day=$(date -d "@$start" +%F)
       update_self
     fi
-  elif [ $(($(now) - $(get checked | grep -x '[0-9]*' || echo 0))) -ge $CHECK_EVERY ]; then
+  elif [ -n "$half" ] || [ $(($(now) - $(get checked | grep -x '[0-9]*' || echo 0))) -ge $CHECK_EVERY ]; then
     check_all
   fi
+  # (and one that came in during those)
+  [ -z "$stuck" ] && asked && continue
   sleep 60 &
   nap=$!
   wait $nap

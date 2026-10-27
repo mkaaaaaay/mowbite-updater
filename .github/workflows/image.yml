@@ -11,7 +11,9 @@ permissions:
   packages: write
 
 jobs:
+  # only once the checks and the tests went through: the updaters on the mowers take it from here
   image:
+    needs: [check, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

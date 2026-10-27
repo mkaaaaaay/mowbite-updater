@@ -79,6 +79,14 @@ const DE = {
   'Waiting until OpenMower is idle again': 'Warten, bis OpenMower wieder im Leerlauf ist',
   'Waiting until it answers': 'Warten auf Antwort',
   'Going back to the version before': 'Zurück auf die vorige Version',
+  'Looking for updates': 'Sucht nach Updates',
+  'Looking what can go': 'Sieht nach, was weg kann',
+  'Deleting': 'Löscht',
+  'Mower right now: {what}': 'Mäher gerade: {what}',
+  'mowing': 'mäht',
+  'driving to the dock': 'fährt zum Dock',
+  'leaving the dock': 'fährt aus dem Dock',
+  'recording an area': 'nimmt eine Fläche auf',
   '{n} of {of} layers': '{n} von {of} Ebenen',
   'step {n} of {of}': 'Schritt {n} von {of}',
   'was up to date': 'war aktuell',
@@ -169,7 +177,12 @@ const fmt = (n, d) => n.toLocaleString(german ? 'de-DE' : 'en-GB', {minimumFract
 
 // --- what the updater says ---
 let st = null;
+// what was asked on this page, and when: shown at once, until the updater shows it's on it
 let asked = false;
+let askedFor = '';
+let askedAt = 0;
+// (its run seen since: from then on its bars say it)
+let askedRan = false;
 let lost = false;
 let failed = null;
 let logOpen = false;
@@ -184,7 +197,24 @@ function restarting() {
   const [state, t] = S('updater').split(' ');
   return state === 'restarting' && /^\d+$/.test(t || '') && now - Number(t) < 300 ? Number(t) : null;
 }
-const busy = () => locked || asked || (!!st && (st.requested || running() || !!restarting()));
+// a request the updater took and works on before its bar shows (taken: "<since> now:<part> self back:<part> ..."): what
+// and since when. a look for updates alone keeps nothing from being asked meanwhile, it stops for it
+function taken() {
+  const [since, ...what] = S('taken').split(' ');
+  return {since: /^\d+$/.test(since || '') ? Number(since) : null, what: what.filter((w) => w && w !== 'check')};
+}
+const busy = () => locked || asked || (!!st && (st.requested || taken().what.length > 0 || running() || !!restarting()));
+// since when this was asked (on this page or taken by the updater), null when it wasn't: "now:<part>", "now:all",
+// "back:<part>", "self", "room", "free", "check"
+function askedSince(what) {
+  const word = askedFor.replace(/^now$/, 'now:all').replace('=', ':').replace(/^free:.*/, 'free');
+  if (asked && word === what) return askedAt / 1000;
+  const t = taken();
+  if (t.what.some((w) => (w.startsWith('free:') ? 'free' : w) === what)) return t.since;
+  if (what === 'check' && S('taken').split(' ').includes('check')) return t.since;
+  return null;
+}
+const looking = () => (/^\d+$/.test(S('looking')) ? Number(S('looking')) : askedSince('check'));
 
 async function load() {
   try {
@@ -194,7 +224,9 @@ async function load() {
     lost = false;
     if (started && st.status.started && st.status.started !== started && !document.querySelector('#app :focus')) return void location.reload();
     started = st.status.started || started;
-    if (!st.requested && !running()) asked = false;
+    if (asked && running()) askedRan = true;
+    // (a moment after asking: an answer from before it may not know of it yet)
+    if (Date.now() - askedAt > 4000 && !st.requested && !taken().what.length && !running()) asked = false;
   } catch {
     lost = true;
   }
@@ -208,9 +240,13 @@ async function post(query, body) {
 }
 function ask(query, body) {
   asked = true;
+  askedFor = query;
+  askedAt = Date.now();
+  askedRan = false;
   failed = null;
   render();
-  post(query, body).catch(() => {
+  // (what it says then, at once: it takes a request within a second or two)
+  post(query, body).then(() => setTimeout(load, 1500), () => {
     asked = false;
     failed = tr('The updater did not answer.');
     render();
@@ -229,12 +265,12 @@ function setConf(patch) {
 }
 
 function loop() {
-  load().finally(() => setTimeout(loop, busy() ? 2000 : 5000));
+  load().finally(() => setTimeout(loop, busy() || looking() ? 2000 : 5000));
 }
 // the seconds on a bar
 setInterval(() => {
   now = Date.now() / 1000;
-  if (running() || restarting()) render();
+  if (running() || restarting() || asked || S('taken') || looking()) render();
 }, 1000);
 
 // --- the parts, in words ---
@@ -316,6 +352,9 @@ function stepLabel(p) {
       restart: 'Restarting',
       wait: p.part === 'openmower' ? 'Waiting until OpenMower is idle again' : 'Waiting until it answers',
       back: 'Going back to the version before',
+      look: 'Looking for updates',
+      room: 'Looking what can go',
+      free: 'Deleting',
     }[p.step],
   );
 }
@@ -323,6 +362,8 @@ function stepDetail(p) {
   if (p.step === 'extract' && p.of) return tr('{n} of {of} layers', {n: p.done || 0, of: p.of});
   if (p.step === 'build' && p.of) return tr('step {n} of {of}', {n: Math.min(p.of, (p.done || 0) + 1), of: p.of});
   if (p.pct !== null && p.step === 'download') return p.pct + ' %';
+  // (asked for before this page knew when)
+  if (!p.since) return '';
   const secs = Math.max(0, Math.round(now - p.since));
   return Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
 }
@@ -339,13 +380,15 @@ function runText() {
   }
   return null;
 }
+// OpenMower's states besides idle, in words
+const STATES = {MOWING: 'mowing', DOCKING: 'driving to the dock', UNDOCKING: 'leaving the dock', AREA_RECORDING: 'recording an area'};
 function mowerText() {
   const m = S('mower');
   if (!st) return '';
   if (m === '1') return tr('in the dock');
   if (m === '0 IDLE') return tr('idle, not in the dock');
   if (m === '0 unknown') return tr("OpenMower doesn't answer");
-  if (m.startsWith('0 ')) return m.slice(2).toLowerCase().replace(/_/g, ' ');
+  if (m.startsWith('0 ')) return STATES[m.slice(2)] ? tr(STATES[m.slice(2)]) : m.slice(2).toLowerCase().replace(/_/g, ' ');
   return tr('no MQTT');
 }
 
@@ -401,6 +444,24 @@ function twoTaps(key, label, question, go) {
   }, sure === key ? question : label);
 }
 
+// a part asked for that isn't on its bar yet: from the tap on, so something moves at once. in a run before its first
+// step only the first one (the others are in line), the time since it was asked when known
+function waiting(id) {
+  const prog = progressNow();
+  const parts = runParts();
+  if (parts.includes(id)) return !prog && parts.indexOf(id) === 0 ? {step: 'prepare', since: askedSince('now:' + id) || askedSince('now:all')} : null;
+  const back = askedSince('back:' + id);
+  if (back !== null) return {step: 'back', since: back};
+  const t = askedSince(id === 'updater' ? 'self' : 'now:' + id);
+  return t !== null ? {step: 'prepare', since: t} : null;
+}
+// its getting ready counted from the tap, not from when the updater got to it
+function fromTap(p) {
+  if (p.step !== 'prepare') return p;
+  const t = askedSince(p.part === 'updater' ? 'self' : 'now:' + p.part) || askedSince('now:all');
+  return t && t < p.since ? {...p, since: t} : p;
+}
+
 function bar(p) {
   const label = stepLabel(p);
   return h('div', {class: 'progress'},
@@ -419,7 +480,8 @@ function partCard(p) {
   const prog = progressNow();
   const mine = prog && prog.part === id ? prog : null;
   const parts = runParts();
-  const queued = !mine && prog && parts.indexOf(id) > parts.indexOf(prog.part);
+  const queued = !mine && parts.includes(id) && parts.indexOf(id) > (prog ? parts.indexOf(prog.part) : 0);
+  const wait = !mine && !queued && waiting(id);
   const plannerHere = PARTS().some((x) => x.id === 'planner');
   const stable = S(id + '_stable');
 
@@ -443,7 +505,8 @@ function partCard(p) {
       h('span', {class: 'name'}, p.name || p.container),
       avail && BADGE[avail] && h('span', {class: 'badge' + (isNew ? ' new' : '')}, tr(BADGE[avail]))),
     dim(tr('Runs: {what}', {what: runningText(p)})),
-    mine && bar(mine),
+    mine && bar(fromTap(mine)),
+    wait && bar({part: id, step: wait.step, pct: null, since: wait.since}),
     queued && dim(tr('Next in line, after the one updating now.')),
     pick && h('div', {class: 'row'}, pick,
       h('button', {class: 'control' + (isNew ? ' primary' : ''), disabled: busy() || fixed, onclick: () => ask('now=' + id)}, tr('Update'))),
@@ -500,6 +563,7 @@ function selfCard() {
   const prog = progressNow();
   const mine = prog && prog.part === 'updater' ? prog : null;
   const since = restarting();
+  const wait = !mine && !since && waiting('updater');
   const tag = (S('updater_available').split(' ')[1] || '').split(':').pop() || '–';
   const res = result({id: 'updater', kind: 'image'});
   return h('div', {class: 'card'},
@@ -507,7 +571,8 @@ function selfCard() {
       h('span', {class: 'name'}, 'MowBite Updater'),
       avail && BADGE[avail] && h('span', {class: 'badge' + (isNew ? ' new' : '')}, tr(BADGE[avail]))),
     dim(tr('Runs: {what}', {what: [rev && rev !== '?' ? tr('commit {c}', {c: rev}) : tr('state unknown'), date(day)].filter(Boolean).join(' · ')})),
-    mine && bar(mine),
+    mine && bar(fromTap(mine)),
+    wait && bar({part: 'updater', step: wait.step, pct: null, since: wait.since}),
     since && bar({part: 'updater', step: 'restart', pct: null, since}),
     since && dim(tr('Restarting the updater, the page comes back by itself')),
     h('div', {class: 'row'},
@@ -562,8 +627,11 @@ function scheduleCard() {
 function actionsCard() {
   const free = /^\d+$/.test(S('disk_free')) ? Number(S('disk_free')) : null;
   const run = runText();
+  const look = looking();
+  const all = running() || askedRan ? null : askedSince('now:all');
   const line = [
-    busy() && !run ? tr('asked…') : run,
+    // (still in line: it finishes what it does first)
+    run || (st.requested ? tr('asked…') : null),
     lost && tr('No answer from the updater for a moment.'),
     S('checked') && tr('Last checked {t}.', {t: when(S('checked'))}),
     free !== null && tr('{gb} GB free on the mower.', {gb: fmt(free / 1024, 1)}),
@@ -584,6 +652,8 @@ function actionsCard() {
     h('div', {class: 'row'},
       h('button', {class: 'control', disabled: busy(), onclick: () => ask('check')}, tr('Check for updates')),
       h('button', {class: 'control', disabled: busy(), onclick: () => ask('now')}, tr('Update all'))),
+    all !== null && bar({part: '', step: 'prepare', pct: null, since: all}),
+    look !== null && bar({part: '', step: 'look', pct: null, since: look}),
     line && dim(line),
     failed && h('div', {class: 'warn'}, failed),
     log && details,
@@ -614,6 +684,8 @@ function roomCard() {
       dim(tr('The next build (the planner) then takes longer and needs the internet.')),
       h('div', {class: 'row'}, dim(size(cache)), twoTaps('cache', tr('Clear'), tr('Really delete?'), () => ask('free=cache')))),
     !items.length && !cache && dim(tr('Nothing to delete right now.')),
+    askedSince('room') !== null && bar({part: '', step: 'room', pct: null, since: askedSince('room')}),
+    askedSince('free') !== null && bar({part: '', step: 'free', pct: null, since: askedSince('free')}),
     h('div', {class: 'row'},
       h('button', {class: 'control', disabled: busy(), onclick: () => ask('room')}, tr('Look again')),
       items.length > 1 ? twoTaps('all', tr('Delete all ({size})', {size: size(total)}), tr('Really delete?'), () => ask('free=all')) : h('span')),
@@ -638,6 +710,8 @@ function render() {
     locked && h('div', {class: 'warn'}, tr('This page is shown inside another one, open it on its own to change anything:'), ' ',
       h('a', {href: location.origin + '/', target: '_blank', rel: 'noreferrer'}, location.origin)),
     dim(tr("Only with the mower idle in the dock. If a new version doesn't start, it goes back to the one before. Afterwards old images and the build cache are cleared away.")),
+    // (embedded its head with the mower's state isn't there)
+    document.documentElement.classList.contains('embed') && dim(tr('Mower right now: {what}', {what: mowerText()})),
     awayCard(),
     ...PARTS().map(partCard),
     selfCard(),
