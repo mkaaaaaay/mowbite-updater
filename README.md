@@ -11,13 +11,15 @@ by itself.
 - Shows each app's version and whether a new one is out. It looks every 6 hours, "Check for updates" looks right away.
 - Updates an app right away when you tap "Update", with the newest version even if the page doesn't show it yet. Or by
   itself at night, if you switch that on. Out of the box, nothing updates by itself.
-- Waits until the mower is idle in the dock, and stops if the mower drives off.
+- Only while the mower is idle in the dock: at night it tries again every 10 minutes, a tap while the mower is out
+  isn't done and its card says so. It stops if the mower drives off.
 - Checks that the new version really works. If not, it goes back to the old version.
 - Checks there's enough free space first and cleans up old versions afterwards.
 - Shows what it does from the moment you tap: a progress bar while it gets ready, downloads and restarts an app, and
   while it checks for updates.
-- Keeps itself up to date too: "Update" on its own card, or at night after the automatic updates. If its new version
-  doesn't come up, the one before starts again.
+- Keeps itself up to date too: "Update" on its own card, or at night after the automatic updates, also when the mower
+  isn't in the dock (its own update doesn't touch the mower). If its new version doesn't come up, the one before starts
+  again.
 
 ## Install
 
@@ -30,6 +32,10 @@ by itself.
 3. Tap "Deploy".
 
 Then open `http://<your-mower>:8083`.
+
+A stack of its own and the updater in MowBite's `compose.yaml` can't run at the same time, both are named
+`mowbite-updater`. Installing MowBite later: remove this stack first, or leave the `updater:` block out of MowBite's
+`compose.yaml`. (Its settings are in this stack's `.updater` folder, the one in MowBite's stack starts with its own.)
 
 <details>
 <summary>Or in a terminal on the mower</summary>
@@ -48,8 +54,10 @@ On its page `http://<your-mower>:8083`, or in MowBite under Settings, Updates:
 
 - **Update** updates that app now.
 - **Automatically at night** lets it update that app by itself, at the time and on the days you pick.
-- **Back to the version before** (MowBite and other apps) if something is wrong after an update.
-- **Make room** shows old versions and leftovers you can delete. Nothing is deleted without asking.
+- **Back to the version before** if something is wrong after an update (MowBite and other apps, and OpenMower as long
+  as its registry still has the version before).
+- **Make room** shows old versions and leftovers you can delete. After each update it clears leftovers without a name,
+  the unused build cache and older versions beyond the ones it keeps by itself.
 - **MowBite Updater** has a card of its own: "Update" there updates the updater itself.
 
 Its page looks like MowBite, in the design picked in MowBite when you open it from there. MowBite shows this page under
@@ -78,7 +86,7 @@ It then shows up on the updater's page. Optional labels:
 | `mowbite.update.check: ":8080/health"` | the address that answers when the app works (on the app, or a full url) |
 | `mowbite.update.log: "Server started"` | or: a line that shows up in its log when it works |
 | `mowbite.update.gate: none` | may update while the mower is out mowing |
-| `mowbite.update.stable: github:owner/repo` | offers "stable": the newest release of that repo |
+| `mowbite.update.stable: github:owner/repo` | offers "stable": the newest release of that repo, as a tag of the same image named like the release without a leading v (release v1.2.3: `:1.2.3`) |
 
 Without a check it waits for Docker's own health check, or else half a minute without a crash.
 
@@ -97,9 +105,10 @@ Without a check it waits for Docker's own health check, or else half a minute wi
 - **Settings and log** stay in its own stack folder (`.updater`).
 - **Stopped halfway** (power gone): at its next start it puts things back or finishes checking. Only if the power goes
   in the few seconds it swaps itself for its new version, it may not come back: then tap "Update" on its stack in Dockge.
-- **Tested** on every change, and a new version only goes out when all tests pass: `test/run.sh` runs it against a
-  made-up mower on the machine's own docker (update, a version that doesn't start, the mower leaving the dock, a stop
-  halfway, a request while it checks, picked apps, builds, itself).
+- **Tested** before every new version, which only goes out when all tests pass: `test/run.sh` runs it against a
+  made-up mower on the machine's own docker (update and back, a version that doesn't start, the mower leaving the dock,
+  a stop halfway, a request while it checks, picked apps, stable, OpenMower and the planner built on it, the night, no
+  answer from the registry, making room, builds, itself).
 
 <details>
 <summary>Settings (environment)</summary>
@@ -118,8 +127,9 @@ All optional, in `compose.yaml` under `environment`:
 <summary>For other apps: the interface</summary>
 
 The same one its page and MowBite use, on port 8083. A `POST` needs the header `Content-Type: application/json`
-(the body stays plain lines): so a web page some browser has open can't change anything, programs and its own page
-can.
+(the body stays plain lines): so a web page some browser has open can't change anything directly, programs and its own
+page can. Through MowBite (its `update` script) MowBite's rules apply: its page, the app and pages from your home
+network.
 
 - `GET /cgi-bin/updater`: settings, apps, status, what can go and the log as JSON. While it updates, `status.progress`
   says what it does: `<app> <step> <percent or -> <since> [<done> <of>]`, steps `prepare`, `download`, `extract`,
@@ -130,7 +140,8 @@ can.
   `days daily` (or `days 1,3,5`, Monday is 1), `picked app1,app2` (or `picked none`). Lines left out stay as they are
 - `POST ?now` (all apps, then itself) or `?now=<app>`, `?self` (only itself), `?back=<app>`, `?check`, `?room`,
   `?free=img:<id>`, `?free=cache`, `?free=all`. Its own state is in `status` as `updater_running`, `updater_available`
-  and `updater`
+  and `updater`. What came of an app last is `status.<app>`, from when `status.<app>_at` (unix time), the mower's time
+  zone `status.clock` (`+0100`)
 
 </details>
 

@@ -20,7 +20,8 @@ ME=${UPDATER_CONTAINER:-mowbite-updater}
 if [ -n "$REQUEST_METHOD" ] && [ -z "$STATE_DIR" ] && [ -s /tmp/updater-state ]; then
   read -r STATE < /tmp/updater-state
 else
-  exists "$ME" || ME=$(sed -n 's|.*/containers/\([0-9a-f]\{64\}\)/.*|\1|p' /proc/self/mountinfo 2>/dev/null | head -n1)
+  # (found by its id: then by its name, which stays when compose makes it anew)
+  exists "$ME" || ME=$(docker inspect -f '{{.Name}}' "$(sed -n 's|.*/containers/\([0-9a-f]\{64\}\)/.*|\1|p' /proc/self/mountinfo 2>/dev/null | head -n1)" 2>/dev/null | sed 's|^/||')
   STATE=${STATE_DIR:-$(label "$ME" project.working_dir)/.updater}
 fi
 CONF=$STATE/conf
@@ -42,28 +43,34 @@ log() {
 # one line per value, the page gets them. no value: the key goes. written whole and moved in place, only when all of it
 # got written (a full disk leaves the one there was)
 status() {
-  local key="$1" tmp rc
+  local key="$1" tmp
   shift
   [ -f "$STATUS" ] || : > "$STATUS"
   tmp=$(mktemp "$STATUS.XXXXXX") || return 0
-  grep -v "^$key " "$STATUS" > "$tmp"
-  rc=$?
-  if [ $rc -le 1 ] && { [ $# -eq 0 ] || echo "$key $*" >> "$tmp"; }; then mv "$tmp" "$STATUS"; else rm -f "$tmp"; fi
+  # (sed, not grep: busybox's grep doesn't say when it couldn't write)
+  if sed "/^$key /d" "$STATUS" > "$tmp" 2> /dev/null && { [ $# -eq 0 ] || echo "$key $*" >> "$tmp"; } 2> /dev/null; then mv "$tmp" "$STATUS"; else rm -f "$tmp"; fi
 }
 get() { sed -n "s/^$1 //p" "$STATUS" 2>/dev/null | head -n1; }
 
 # a container's stack the way dockge runs it, within $1 seconds: all its compose files and env files, from its folder
 compose() {
-  local t="$1" c="$2" dir files envs
+  local t="$1" c="$2" l project dir files envs
   shift 2
-  dir=$(label "$c" project.working_dir)
+  # (its labels in one go: project|folder|compose files|env files)
+  l=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.project.working_dir"}}|{{index .Config.Labels "com.docker.compose.project.config_files"}}|{{index .Config.Labels "com.docker.compose.project.environment_file"}}' "$c" 2>/dev/null)
+  project=${l%%|*}
+  l=${l#*|}
+  dir=${l%%|*}
+  l=${l#*|}
+  files=${l%%|*}
+  envs=${l#*|}
   # (paths with spaces don't happen in dockge's stacks)
-  files=$(label "$c" project.config_files | tr ',' '\n' | sed '/./!d; s/^/-f /')
-  envs=$(label "$c" project.environment_file | tr ',' '\n' | sed '/./!d' | while read -r f; do
+  files=$(printf '%s' "$files" | tr ',' '\n' | sed '/./!d; s/^/-f /')
+  envs=$(printf '%s' "$envs" | tr ',' '\n' | sed '/./!d' | while read -r f; do
     case $f in /*) echo "--env-file $f" ;; *) echo "--env-file $dir/$f" ;; esac
   done)
   # shellcheck disable=SC2086
-  timeout "$t" docker compose -p "$(label "$c" project)" --project-directory "$dir" $envs $files "$@"
+  timeout "$t" docker compose -p "$project" --project-directory "$dir" $envs $files "$@"
 }
 in_compose() { [ -n "$(label "$1" project)" ] && [ -f "$(label "$1" project.config_files | cut -d, -f1)" ]; }
 service() { label "$1" service; }

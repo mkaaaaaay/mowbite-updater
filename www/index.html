@@ -5,7 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MowBite Updater</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%233fa34d'/%3E%3Cpath d='M8 4v6M5 7l3 3 3-3' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="style.css">
+<!-- (?v=: the version of the page, set when the image is built, so a browser doesn't keep the files of the one before) -->
+<link rel="preload" href="fonts/geist-latin.woff2?v=__V__" as="font" type="font/woff2" crossorigin>
+<style>
+/* Geist 1.800, its latin part as MowBite ships it (variable, 100 to 900), under the SIL OFL 1.1 (fonts/OFL.txt). what
+   it doesn't have (▾) comes from the next font, as in MowBite */
+@font-face {
+  font-family: Geist;
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(fonts/geist-latin.woff2?v=__V__) format('woff2');
+}
+</style>
+<link rel="stylesheet" href="style.css?v=__V__">
 <script>
 // MowBite's design: the one MowBite passes on with its link (?theme=), kept for the next visit, else frost like MowBite
 (function () {
@@ -25,13 +38,17 @@
 <body>
 <header>
   <h1>MowBite Updater</h1>
-  <span id="mower" class="chip"></span>
+  <!-- (only for an app.js from before, still in a browser's cache) -->
+  <span id="mower" hidden></span>
 </header>
-<main id="app"><p class="dim" id="loading">…</p></main>
+<main id="app"><p class="dim">…</p></main>
 <footer>
   <span>MowBite Updater · GPL-3.0</span>
   <a href="https://github.com/mkaaaaaay/mowbite-updater" target="_blank" rel="noreferrer">GitHub</a>
 </footer>
-<script src="app.js"></script>
+<!-- what changes, for screen readers -->
+<p id="say" class="sr" aria-live="polite"></p>
+<p id="alert" class="sr" aria-live="assertive"></p>
+<script src="app.js?v=__V__"></script>
 </body>
 </html>

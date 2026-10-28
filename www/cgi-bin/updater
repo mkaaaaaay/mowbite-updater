@@ -5,14 +5,16 @@
 #                       beta or stable, OpenMower's tag), <part>_auto (0 or 1), at (HH:MM), days (daily or 1-7, commas),
 #                       picked (containers looked after besides the known and labelled ones, commas, or none)
 #   POST ?now[=<part>]  update all parts (and itself, last) or one within the next minute
-#   POST ?back=<part>   a part from a registry back to the version before
+#   POST ?back=<part>   a part from a registry back to the version before (OpenMower: the one before its last update,
+#                       from its registry again)
 #   POST ?self          the updater itself to its newest version within the next minute (with ?now: last)
 #   POST ?check         look within the next minute whether there's something new
 #   POST ?room          list what can be deleted to make room
 #   POST ?free=<what>   delete img:<id> (one from that list), all (the whole list) or cache (the build cache)
 # a POST only with Content-Type: application/json (whatever the body), and nothing for other sites' pages to read: a
-# page in some browser in the network can't change anything here, its own page and programs (MowBite) can.
-# it runs as root next to docker: nothing from the request gets anywhere unchecked
+# page in some browser in the network can't change anything here directly, its own page and programs can. MowBite passes
+# on what its own scripts take (its page, the app, pages of the home network), by its rules. it runs as root next to
+# docker: nothing from the request gets anywhere unchecked
 . /lib.sh
 plain() { printf 'Content-Type: text/plain\r\nCache-Control: no-store\r\n\r\n%s\n' "$1"; exit 0; }
 # json string content: control characters out, backslashes and quotes escaped
@@ -20,7 +22,6 @@ jstr() { tr -d '\000-\010\013-\037' | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/ /g'; }
 # (and it's woken up: it looks at once, not within the minute)
 request() { mkdir -p "$STATE" && echo "$1" >> "$REQ" && { kill -USR1 1 2> /dev/null || :; } && plain ok; }
 is_part() { valid "$1" "$ID" && part_ids | grep -qx "$1"; }
-
 case "$REQUEST_METHOD" in
 POST)
   case ${CONTENT_TYPE:-} in application/json*) ;; *) plain bad ;; esac
@@ -38,8 +39,11 @@ POST)
       [ -z "$v" ] || echo "$1 $v"
     }
     mkdir -p "$STATE"
-    tmp=$(mktemp "$CONF.XXXXXX") || plain failed
-    {
+    # (one change at a time: the next one waits and reads what this one wrote)
+    exec 9> "$STATE/conf.lock"
+    timeout 5 flock 9 || plain failed
+    # (all of it first, then written in one go and checked: a full disk leaves the settings there were)
+    out=$(
       # the settings of a part not there right now (its stack down) stay
       known=" at days picked "
       for id in $(part_ids); do known="$known$id ${id}_auto "; done
@@ -61,7 +65,9 @@ POST)
           keep "$id" '(beta|stable)'
         fi
       done
-    } > "$tmp" && mv "$tmp" "$CONF" && plain ok
+    )
+    tmp=$(mktemp "$CONF.XXXXXX") || plain failed
+    { [ -z "$out" ] || printf '%s\n' "$out"; } > "$tmp" && mv "$tmp" "$CONF" && plain ok
     rm -f "$tmp"
     plain failed
     ;;

@@ -9,20 +9,22 @@ old=$2
 new=$(docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null)
 [ -n "$new" ] && docker image inspect "$old" > /dev/null 2>&1 || exit 1
 svc=$(label "$ME" service)
-t0=$(now)
+# (its start so far: the new one is another start, whatever the clock does meanwhile)
+was=$(docker inspect -f '{{.State.StartedAt}}' "$ME" 2>/dev/null)
 
 log "updater: starting its new version"
-compose 300 "$ME" up -d --no-deps "$svc" > /dev/null 2>&1
+# (never pulled here: the new image is there, and the one before stays the way back)
+compose 300 "$ME" up -d --no-deps --pull never "$svc" > /dev/null 2>&1
 n=0
 while [ $n -lt 24 ]; do
   sleep 5
   # (started: its time and its image, written as it starts. then still the same start half a minute later: no crash loop)
   # shellcheck disable=SC2046
   set -- $(get started)
-  if [ "${1:-0}" -ge "$t0" ] && [ "$2" = "$new" ] && [ "$(docker inspect -f '{{.State.Running}}' "$ME" 2>/dev/null)" = true ]; then
-    began=$(docker inspect -f '{{.State.StartedAt}}' "$ME")
+  began=$(docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$ME" 2>/dev/null)
+  if [ "$2" = "$new" ] && [ "${began%% *}" = true ] && [ "${began#* }" != "$was" ]; then
     sleep 30
-    if [ "$(docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$ME" 2>/dev/null)" = "true $began" ]; then
+    if [ "$(docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$ME" 2>/dev/null)" = "$began" ]; then
       log "updater: its new version runs"
       exit 0
     fi
@@ -31,6 +33,9 @@ while [ $n -lt 24 ]; do
 done
 
 log "updater: its new version didn't come up, back to the one before"
-status updater_failed "$new"
+# (left out: its id, and the digest its registry knows it by)
+d=$(docker image inspect -f '{{join .RepoDigests " "}}' "$ref" 2>/dev/null | tr ' ' '\n' |
+  awk -F@ -v r="$(printf '%s' "$ref" | sed 's/@.*//; s/:[^:/]*$//')" '$1 == r {print $2; exit}')
+status updater_failed "$new" ${d:+"$d"}
 docker tag "$old" "$ref"
-compose 300 "$ME" up -d --no-deps "$svc" > /dev/null 2>&1
+compose 300 "$ME" up -d --no-deps --pull never "$svc" > /dev/null 2>&1

@@ -1,20 +1,32 @@
 /* MowBite Updater's page in MowBite's look: its designs (light, dark, frost, aurora, sunny, openmower) with glass cards
-   over its patches of colour, a phone first. the design is the one picked in MowBite (it passes it on with the link),
-   else frost like MowBite's own default */
+   over its patches of colour, its font (Geist, in index.html), a phone first. the design is the one picked in MowBite
+   (it passes it on with the link), else frost like MowBite's own default. the colours are MowBite's
+   (src/app/globals.css in github.com/mkaaaaaay/mowbite) */
+
 :root {
   --background: #eef0f6;
   --foreground: #16181d;
   --card: rgba(255, 255, 255, 0.58);
   --card-border: rgba(255, 255, 255, 0.85);
+  /* fields, badges and lines: the white edge of the cards would vanish on them */
+  --field-border: rgba(30, 36, 70, 0.22);
   --card-blur: blur(18px) saturate(160%);
   --card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 2px rgba(30, 36, 70, 0.05), 0 8px 24px rgba(30, 36, 70, 0.09);
   --btn-3d: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 1px rgba(30, 36, 70, 0.08), 0 2px 6px rgba(30, 36, 70, 0.07);
   --btn-3d-hover: inset 0 1px 0 rgba(255, 255, 255, 0.95), 0 2px 2px rgba(30, 36, 70, 0.08), 0 6px 14px rgba(30, 36, 70, 0.11);
   --text-secondary: #5b6170;
   --accent: #2e6ad1;
+  /* text on the accent */
+  --accent-foreground: #fff;
   --warning: #a8780f;
   --error: #cf3a3f;
   --success: #2a8a47;
+  --soft-good: #276b33;
+  --soft-warn: #7d5600;
+  --soft-bad: #a52a2a;
+  /* the fill of the yellow and red boxes (.warn, .error) */
+  --warn-fill: color-mix(in srgb, var(--warning) 22%, #fff);
+  --error-fill: color-mix(in srgb, var(--error) 18%, #fff);
   --well: rgba(30, 36, 70, 0.05);
   color-scheme: light;
 }
@@ -25,15 +37,22 @@
     --foreground: #f1f1f1;
     --card: rgba(255, 255, 255, 0.05);
     --card-border: rgba(255, 255, 255, 0.09);
+    --field-border: var(--card-border);
     --card-blur: blur(3px) saturate(140%);
     --card-shadow: none;
     --btn-3d: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 1px 1px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.25);
     --btn-3d-hover: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 2px 2px rgba(0, 0, 0, 0.35), 0 6px 14px rgba(0, 0, 0, 0.35);
     --text-secondary: #9a9ba0;
     --accent: #5b9df0;
+    --accent-foreground: #0b0b0b;
     --warning: #d4ac4a;
     --error: #ff6669;
     --success: #4cbf72;
+    --soft-good: #a5d6a7;
+    --soft-warn: #ffcc80;
+    --soft-bad: #ef9a9a;
+    --warn-fill: rgba(80, 54, 0, 0.55);
+    --error-fill: rgba(100, 14, 30, 0.55);
     --well: rgba(0, 0, 0, 0.25);
     color-scheme: dark;
   }
@@ -48,15 +67,22 @@
   --foreground: #f1f1f1;
   --card: rgba(255, 255, 255, 0.05);
   --card-border: rgba(255, 255, 255, 0.09);
+  --field-border: var(--card-border);
   --card-blur: blur(3px) saturate(140%);
   --card-shadow: none;
   --btn-3d: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 1px 1px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.25);
   --btn-3d-hover: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 2px 2px rgba(0, 0, 0, 0.35), 0 6px 14px rgba(0, 0, 0, 0.35);
   --text-secondary: #9a9ba0;
   --accent: #5b9df0;
+  --accent-foreground: #0b0b0b;
   --warning: #d4ac4a;
   --error: #ff6669;
   --success: #4cbf72;
+  --soft-good: #a5d6a7;
+  --soft-warn: #ffcc80;
+  --soft-bad: #ef9a9a;
+  --warn-fill: rgba(80, 54, 0, 0.55);
+  --error-fill: rgba(100, 14, 30, 0.55);
   --well: rgba(0, 0, 0, 0.25);
   color-scheme: dark;
 }
@@ -71,6 +97,7 @@
   --well: rgba(0, 0, 0, 0.16);
 }
 
+/* (aurora and sunny: their own colours for light text on violet and petrol, on the sky and the meadow) */
 :root[data-theme='aurora'] {
   --background: #4a5e82;
   --foreground: #f3f5f9;
@@ -80,6 +107,16 @@
   --card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 6px 22px rgba(20, 24, 60, 0.18);
   --text-secondary: #bec9c6;
   --accent: #82d5c8;
+  --accent-foreground: #0b0b0b;
+  --warning: #ffd479;
+  --error: #ff9aa2;
+  --success: #8eeab0;
+  --soft-good: #b8f2c9;
+  --soft-warn: #ffe0a0;
+  --soft-bad: #ffbcc2;
+  /* (fuller boxes: through a thin fill the sky turns yellow and red into the same light grey) */
+  --warn-fill: rgba(135, 92, 0, 0.75);
+  --error-fill: rgba(150, 20, 40, 0.75);
   --well: rgba(0, 0, 0, 0.14);
 }
 
@@ -92,6 +129,15 @@
   --card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 6px 22px rgba(10, 40, 50, 0.18);
   --text-secondary: #d0e2dc;
   --accent: #9ff0bf;
+  --accent-foreground: #0b0b0b;
+  --warning: #ffe27a;
+  --error: #ffb1ab;
+  --success: #d9ff9f;
+  --soft-good: #e4ffc0;
+  --soft-warn: #fff0b0;
+  --soft-bad: #ffd2cd;
+  --warn-fill: rgba(135, 92, 0, 0.75);
+  --error-fill: rgba(150, 20, 40, 0.75);
   --well: rgba(0, 0, 0, 0.13);
 }
 
@@ -104,6 +150,7 @@
   --card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 6px 22px rgba(0, 0, 0, 0.35);
   --text-secondary: #a3ada7;
   --accent: #3dac6c;
+  --accent-foreground: #0b0b0b;
   --well: rgba(0, 0, 0, 0.3);
 }
 
@@ -127,7 +174,7 @@ body {
     radial-gradient(circle at 70% 70%, rgba(91, 157, 240, 0.12), transparent 45%),
     radial-gradient(circle at 50% 100%, rgba(76, 191, 114, 0.22), transparent 55%);
   background-attachment: fixed;
-  font: 15px/1.45 Arial, Helvetica, sans-serif;
+  font: 15px/1.45 Geist, Arial, Helvetica, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   /* nothing to select but the log */
@@ -178,26 +225,23 @@ body {
     radial-gradient(ellipse 70% 30% at 50% 100%, rgba(20, 133, 63, 0.22), transparent 70%);
 }
 
+/* as wide as MowBite's pages */
 header,
 main,
 footer {
-  max-width: 560px;
+  max-width: 720px;
   margin: 0 auto;
   padding: 0 16px;
 }
 
 header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
   padding-top: 20px;
   padding-bottom: 12px;
 }
 
 h1 {
   margin: 0;
-  font-size: 22px;
+  font-size: 28px;
   font-weight: 700;
 }
 
@@ -222,7 +266,7 @@ a {
   color: var(--accent);
 }
 
-/* a glass card like MowBite's settings */
+/* a glass card like MowBite's settings. its width decides the columns inside, also embedded */
 .card {
   display: flex;
   flex-direction: column;
@@ -234,13 +278,30 @@ a {
   box-shadow: var(--card-shadow);
   backdrop-filter: var(--card-blur);
   -webkit-backdrop-filter: var(--card-blur);
+  container-type: inline-size;
 }
 
+/* the badge goes under the name when both don't fit in a line */
 .head {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px 8px;
+}
+
+/* the name, under it in a line what it is: like MowBite's settings groups */
+.title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 120px;
+  min-width: 0;
+}
+
+.title small {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .name {
@@ -248,25 +309,27 @@ a {
   font-weight: 600;
 }
 
-.chip,
 .badge {
-  flex-shrink: 0;
+  flex: none;
   padding: 2px 10px;
   border-radius: 999px;
-  border: 1px solid var(--card-border);
+  border: 1px solid var(--field-border);
   font-size: 12px;
   color: var(--text-secondary);
+  white-space: nowrap;
 }
 
-.chip {
-  background: var(--card);
-  backdrop-filter: var(--card-blur);
-  -webkit-backdrop-filter: var(--card-blur);
-}
-
-.new {
+/* green for what there is, the accent for what to tap */
+.badge.new {
   border-color: color-mix(in srgb, var(--success) 70%, transparent);
   background: color-mix(in srgb, var(--success) 25%, transparent);
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.badge.bad {
+  border-color: color-mix(in srgb, var(--warning) 70%, transparent);
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
   color: var(--foreground);
   font-weight: 600;
 }
@@ -277,33 +340,87 @@ a {
   color: var(--text-secondary);
 }
 
-.warn {
+/* two kinds of trouble: nothing done or gone back by itself (yellow), failed (red). told apart by their fill, not only
+   by their edge: light under dark text, deep under light text (the fills with the designs above) */
+.warn,
+.error {
+  margin: 0;
   font-size: 13px;
   padding: 8px 10px;
   border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--warning) 60%, transparent);
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
 }
 
-/* two equal columns: every button and pick box the same size */
+.warn {
+  border: 1px solid color-mix(in srgb, var(--warning) 80%, transparent);
+  background: var(--warn-fill);
+}
+
+.error {
+  border: 1px solid color-mix(in srgb, var(--error) 80%, transparent);
+  background: var(--error-fill);
+}
+
+/* two equal columns: every button and pick box the same size, one under the other where the card is narrow */
 .row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  align-items: center;
+  align-items: stretch;
+}
+
+.row > .dim,
+.row:has(> .dim) > .control {
+  align-self: center;
+}
+
+@container (max-width: 300px) {
+  .row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* a card's buttons: the whole width on a phone, side by side (one alone on the right) where there's room */
+.act {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.act > * {
+  grid-column: 1 / -1;
+}
+
+@container (min-width: 480px) {
+  .act > * {
+    grid-column: auto;
+  }
+
+  .act > :only-child {
+    grid-column: 2;
+  }
 }
 
 .control {
   width: 100%;
-  height: 38px;
-  padding: 0 12px;
+  min-height: 38px;
+  padding: 4px 12px;
   border-radius: 999px;
   border: 1px solid var(--card-border);
   background: var(--card);
   color: var(--foreground);
   font: inherit;
   font-size: 13px;
+  line-height: 1.2;
   box-shadow: var(--btn-3d);
+}
+
+/* fields are fields, not a second kind of button */
+select.control,
+input.control {
+  height: 38px;
+  background-color: transparent;
+  box-shadow: none;
+  border-color: var(--field-border);
 }
 
 select.control {
@@ -335,10 +452,12 @@ button.control {
   cursor: default;
 }
 
+/* the one to tap: the accent in full, like MowBite's switches when on */
 .primary {
   font-weight: 600;
-  border-color: color-mix(in srgb, var(--success) 70%, transparent);
-  background: color-mix(in srgb, var(--success) 35%, transparent);
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-foreground);
 }
 
 .danger {
@@ -347,38 +466,71 @@ button.control {
   background: color-mix(in srgb, var(--error) 30%, transparent);
 }
 
-/* buttons give way under the finger like MowBite's */
+/* a button that reads as a link */
+.link {
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* (on a yellow or red box the accent can't be read in every design) */
+.warn .link,
+.error .link {
+  color: var(--foreground);
+}
+
+.control:focus-visible,
+.link:focus-visible,
+summary:focus-visible,
+.check input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* buttons give way under the finger like MowBite's, a quick second tap is no zoom */
 button {
+  touch-action: manipulation;
   transition:
     transform 0.08s ease-out,
     filter 0.08s ease-out,
     box-shadow 0.08s ease-out;
 }
 
-button:active:not(:disabled) {
+button.control:active:not(:disabled) {
   transform: translateY(1px) scale(0.96);
   filter: brightness(0.85);
   box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.35);
 }
 
 @media (hover: hover) and (prefers-reduced-motion: no-preference) {
-  button:not(:disabled):hover {
+  button.control:not(:disabled):hover {
     --btn-3d: var(--btn-3d-hover);
     transform: translateY(-1px);
   }
 }
 
+/* a checkbox like everywhere in MowBite */
 .check {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: 10px;
+  min-height: 32px;
+  font-size: 14px;
+  cursor: pointer;
 }
 
 .check input {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--success);
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .days {
@@ -388,15 +540,146 @@ button:active:not(:disabled) {
 }
 
 .days .control {
+  min-height: 40px;
   padding: 0;
+}
+
+/* folds like MowBite's: no triangle of the browser, a ▾ after the title that turns over while it's open */
+summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+summary::after {
+  content: '▾';
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--text-secondary);
+  transition: transform 0.2s ease;
+}
+
+details[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+/* in a card: its channel and the way back */
+.more > summary {
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.moreBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+/* whole cards that fold: name and what it is on the left, ▾ on the right like MowBite's settings groups (details as a
+   block: not every browser makes it a flex box) */
+.card.fold {
+  display: block;
+}
+
+.fold > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fold > summary::after {
+  margin-left: 0;
+}
+
+.foldBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.groupHead {
+  margin: 8px 4px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.foot {
+  margin: 4px 4px 0;
+}
+
+/* the top: a dot in the colour of what it says */
+.lead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 17px;
+}
+
+.lead::before {
+  content: '';
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 25%, transparent);
+}
+
+.lead.run::before {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.lead.wait::before {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 25%, transparent);
+}
+
+.lead.bad::before {
+  background: var(--error);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 25%, transparent);
+}
+
+.lead.idle::before {
+  background: var(--text-secondary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-secondary) 25%, transparent);
+}
+
+.state {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  transform: translateY(-1px);
+}
+
+.dot.wait {
+  background: var(--warning);
 }
 
 .item {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding-top: 8px;
-  border-top: 1px solid var(--card-border);
+  padding-top: 10px;
+  border-top: 1px solid var(--field-border);
 }
 
 .itemName {
@@ -418,11 +701,16 @@ button:active:not(:disabled) {
   font-size: 13px;
 }
 
+.progressHead > .dim {
+  flex: none;
+  white-space: nowrap;
+}
+
 .track {
   position: relative;
   height: 8px;
   border-radius: 999px;
-  background: var(--well);
+  background: color-mix(in srgb, var(--foreground) 18%, transparent);
   overflow: hidden;
 }
 
@@ -443,6 +731,12 @@ button:active:not(:disabled) {
   border-radius: 999px;
   background: var(--success);
   animation: moving 1.4s ease-in-out infinite;
+}
+
+/* a new version that didn't run, on its way back */
+.warnbar .fill,
+.warnbar .moving {
+  background: var(--warning);
 }
 
 @keyframes moving {
@@ -472,16 +766,23 @@ button:active:not(:disabled) {
   padding: 8px 10px;
   border-radius: 8px;
   background: var(--well);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
-  line-height: 1.45;
+  line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: text;
   -webkit-user-select: text;
 }
 
-summary {
-  cursor: pointer;
+/* for screen readers only */
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* embedded in MowBite's settings: no header, footer or background of its own, the cards like MowBite's own there */
@@ -515,6 +816,10 @@ html.embed body {
 
 .embed .name {
   font-size: 15px;
+}
+
+.embed .lead {
+  font-size: 16px;
 }
 
 /* shown in some other page: nothing to change from there */

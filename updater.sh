@@ -33,18 +33,30 @@ T_REGISTRY=60
 T_PULL=1800
 T_UP=300
 T_BUILD=900
+# the helper of its own update (a test next to a real updater on the same docker: another name)
+SELF=${UPDATER_SELF:-mowbite-updater-self}
 
 alive() { status alive "$(now)"; }
+# what came of a part, for its card, and when (<part>_at)
+outcome() {
+  status "$@"
+  status "${1}_at" "$(now)"
+}
+# seconds since the machine started: a wait that a clock set by ntp meanwhile doesn't cut short or stretch
+up() { cut -d. -f1 /proc/uptime; }
 
 # --- the mower ---
 
+# the broker's user and password in mosquitto_sub's own options file, written at its start: not on its command line,
+# where ps shows them (an empty password can only go there)
+MQTT_OPTS=${XDG_CONFIG_HOME:-$HOME/.config}/mosquitto_sub
 # the mower as OpenMower says it right now over mqtt (nothing the broker kept from before): "1" idle in the dock, else
 # "0 <state>" (MOWING, IDLE out of the dock or with the dock's power gone, unknown while OpenMower doesn't answer),
 # nothing when there's no broker to ask
 mqtt() {
   local t="$1"
   set -- -h "${MQTT_HOST:-127.0.0.1}" -p "${MQTT_PORT:-1883}"
-  [ -n "$MQTT_USER" ] && set -- "$@" -u "$MQTT_USER" -P "$MQTT_PASSWORD"
+  [ -n "$MQTT_USER" ] && [ ! -s "$MQTT_OPTS" ] && set -- "$@" -u "$MQTT_USER" -P "$MQTT_PASSWORD"
   timeout 10 mosquitto_sub "$@" -t "${MQTT_PREFIX}$t" -R -C 1 -W 6 2> /dev/null
 }
 mower() {
@@ -94,15 +106,36 @@ same() {
 }
 # a registry's digest of image:tag, empty when it can't be had
 remote_digest() { timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}' 2>/dev/null; }
-# an image built or loaded here, one its registry doesn't have: it can't be downloaded again. (with containerd's image
-# store a build here has a repo digest too, its own id.) no answer from the registry counts the same: not touched
+# whether the registry has image:tag or image@digest: 0 yes, 1 it says it hasn't (not found, not allowed), 2 no answer
+# (no network, the registry down or slow)
+in_registry() {
+  local out
+  out=$(timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}' 2>&1) && return 0
+  case $out in *"not found"* | *denied* | *nauthorized* | *" 401 "* | *" 403 "* | *" 404 "*) return 1 ;; esac
+  return 2
+}
+# an image built or loaded here, one its registry doesn't have: it can't be downloaded again (0). (with containerd's
+# image store a build here has a repo digest too, its own id.) 2 when the registry didn't answer: no telling
 built_here() {
+  local d rc=0
   case $(docker image inspect -f '{{len .RepoDigests}}' "$1" 2>/dev/null) in "") return 1 ;; 0) return 0 ;; esac
   for d in $(digests "$1"); do
-    timeout $T_REGISTRY docker buildx imagetools inspect "$d" --format '{{.Manifest.Digest}}' > /dev/null 2>&1 && return 1
+    in_registry "$d"
+    case $? in 0) return 1 ;; 2) rc=2 ;; esac
   done
-  return 0
+  return $rc
 }
+# the registry's digest an image came with from repository $2, empty for one built here
+digest_of() { digests "$1" | tr ' ' '\n' | awk -F@ -v r="$2" '$1 == r {print $2; exit}'; }
+# where an image can be had again from repository $2 by its digest: <repo>@<digest>
+prev_of() {
+  local d
+  d=$(digest_of "$1" "$2")
+  [ -n "$d" ] && echo "$2@$d"
+}
+# whether a version of a part is left out because it didn't start: an image id or a registry's digest, any of the words
+# of <part>_failed (its image id and its digest, or only one of them)
+failed_has() { [ -n "$2" ] && case " $(get "$1_failed") " in *" $2 "*) true ;; *) false ;; esac; }
 # a text as a sed pattern
 re() { printf '%s' "$1" | sed 's/[][\.*^$/|]/\\&/g'; }
 # MB free where docker keeps its images: its own folder, the stacks and docker share a disk on OpenMowerOS
@@ -120,24 +153,29 @@ stackfile() {
 # a build's context and its base image (a build argument with IMAGE in its name), from its stack's compose config
 context_of() { compose $T_REGISTRY "$1" config "$(service "$1")" 2>/dev/null | sed -n 's/^ *context: *//p' | head -n1; }
 base_of() { compose $T_REGISTRY "$1" config "$(service "$1")" 2>/dev/null | sed -n 's/^ *[A-Z_]*IMAGE[A-Z_]*: *//p' | tr -d '"' | head -n1; }
-# owner/repo and the branch of a github context, empty for anything else
+# owner/repo and the branch of a github context (as context_of says it), empty for anything else
 source_of() {
-  printf '%s' "$(context_of "$1")" | sed -n 's|^https://github\.com/\([A-Za-z0-9_.-]*/[A-Za-z0-9_.-]*\)\.git\(#\([A-Za-z0-9_./-]*\)\)\{0,1\}$|\1 \3|p'
+  printf '%s' "$1" | sed -n 's|^https://github\.com/\([A-Za-z0-9_.-]*/[A-Za-z0-9_.-]*\)\.git\(#\([A-Za-z0-9_./-]*\)\)\{0,1\}$|\1 \3|p'
 }
 
 # --- the parts ---
 
 # what's there to look after, written to the status: "<id>:<container>:<kind> ...", the name of each (<id>_name).
-# kind build: from a github context, local: built from a copy here (left as it is), image: from a registry
+# kind build: from a github context, local: built from a copy here (left as it is), image: from a registry. ($2 its id:
+# without an answer from its registry it stays what it was)
 kind_of() {
-  if [ -n "$(source_of "$1")" ]; then
-    echo build
+  local ctx
+  ctx=$(context_of "$1")
+  [ -n "$(source_of "$ctx")" ] && echo build && return
   # (a stack with image: and build: . both, like MowBite's, is from its registry as long as that has its tag)
-  elif [ -n "$(context_of "$1")" ] && [ -z "$(remote_digest "$(ref_of "$1")")" ]; then
-    echo local
-  else
-    echo image
+  if [ -n "$ctx" ]; then
+    in_registry "$(ref_of "$1")"
+    case $? in
+    1) echo local && return ;;
+    2) [ -n "$2" ] && kind "$2" | grep -xE 'image|local' && return ;;
+    esac
   fi
+  echo image
 }
 # a running container it would look after but can't reach: "<container>@<its stack's folder>" (- when it wasn't
 # started from a compose file), for its page to say why it's missing
@@ -145,7 +183,9 @@ away() { running "$1" && printf ' %s@%s' "$1" "$(label "$1" project.working_dir 
 # the folders it reaches, as mounted into it (the stacks' folder, by default /opt/stacks)
 reach() { docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$ME" 2>/dev/null | tr ' ' '\n' | grep -vE '^(/var/run/docker\.sock|/etc/localtime|/host/.*|)$' | tr '\n' ' '; }
 find_parts() {
-  local out="" c x id far="" picked cand
+  local out="" c x id far="" picked cand mine
+  # (itself, also by its image: under another name it isn't an app to update from inside)
+  mine=$(repo_of "$(ref_of "$ME")")
   if exists "$OM" && in_compose "$OM"; then
     out="openmower:$OM:openmower"
   elif new_os; then
@@ -173,7 +213,7 @@ find_parts() {
     exists "$c" || continue
     in_compose "$c" || { far="$far$(away "$c")"; continue; }
     if [ "$c" = "$APP" ]; then id=mowbite; else id=planner; fi
-    out="$out $id:$c:$(kind_of "$c")"
+    out="$out $id:$c:$(kind_of "$c" "$id")"
     status "${id}_gate" mower
   done
   status mowbite_name MowBite
@@ -186,19 +226,24 @@ find_parts() {
     for x in $picked; do exists "$x" && echo "$x"; done
   } | awk '!seen[$0]++'); do
     case $c in "$OM" | "$APP" | "$PLANNER" | "$ME") continue ;; esac
+    [ -n "$mine" ] && [ "$(repo_of "$(ref_of "$c")")" = "$mine" ] && continue
     in_compose "$c" || { far="$far$(away "$c")"; continue; }
     id=c_$(echo "$c" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '_' | cut -c1-30)_$(printf '%s' "$c" | md5sum | cut -c1-4)
-    out="$out $id:$c:$(kind_of "$c")"
+    out="$out $id:$c:$(kind_of "$c" "$id")"
     status "${id}_name" "$(own "$c" name | tr -d '\n' | cut -c1-40 | grep . || echo "$c")"
     if [ "$(own "$c" gate)" = none ]; then status "${id}_gate" none; else status "${id}_gate" mower; fi
     # (picked, not labelled: it can be taken out on its page again)
     case $picked in *" $c "*) [ "$(docker inspect -f "{{index .Config.Labels \"$L\"}}" "$c" 2>/dev/null)" = on ] || status "${id}_picked" yes ;; *) status "${id}_picked" ;; esac
   done
-  # what can be picked: the other running containers of the stacks it reaches
+  # what can be picked: the other running containers of the stacks it reaches, not the mqtt broker (it tells whether the
+  # mower is idle in its dock)
   cand=""
   for c in $(docker ps --format '{{.Names}}'); do
     case " $out " in *":$c:"*) continue ;; esac
-    case $c in "$ME" | mowbite-updater-self) continue ;; esac
+    case $c in "$ME" | "$SELF") continue ;; esac
+    x=$(repo_of "$(ref_of "$c")")
+    [ -n "$mine" ] && [ "$x" = "$mine" ] && continue
+    case $x in *mosquitto*) continue ;; esac
     in_compose "$c" && cand="$cand $c"
   done
   # shellcheck disable=SC2086
@@ -262,37 +307,61 @@ stable_tag() {
   v=$(wget -S --spider -T 15 "https://github.com/$src/releases/latest" 2>&1 | sed -n 's|^ *Location: .*/releases/tag/v\{0,1\}\([^[:space:]?]*\).*|\1|p' | tail -n1)
   valid "$v" "$TAG" && echo "$v"
 }
-# the repository of an image reference (its tag off)
-repo_of() { printf '%s' "$1" | sed 's/:[^:/]*$//'; }
+# the repository of an image reference (its tag or digest off)
+repo_of() { printf '%s' "$1" | sed 's/@.*//; s/:[^:/]*$//'; }
 
 # --- files of the stacks ---
 
 # a file of a part's stack changed by a sed expression: kept once as it was (.before-update), written whole and moved in
 # place, with the owner and the rights it had, never through a link. what it wrote is noted (changed_<part> <file>
-# <md5>), so only that change is ever put back. 1: nothing changed
+# <md5> and each line it changed, "<before>:<after>" in base64), so only that change is ever put back. 1: nothing changed
 change_file() {
-  local tmp
+  local tmp lines
   [ -f "$2" ] && [ ! -L "$2" ] || return 1
   tmp=$(mktemp "$2.XXXXXX") || return 1
   if cp -p "$2" "$tmp" && mv "$tmp" "$2.before-update" && tmp=$(mktemp "$2.XXXXXX") && sed "$3" "$2" > "$tmp" &&
     chown "$(stat -c %u:%g "$2")" "$tmp" && chmod "$(stat -c %a "$2")" "$tmp" && mv "$tmp" "$2"; then
-    status "changed_$1" "$2" "$(md5sum < "$2" | cut -d' ' -f1)"
+    lines=$(awk 'NR == FNR {a[FNR] = $0; next} a[FNR] != $0 {print a[FNR]; print}' "$2.before-update" "$2" |
+      while IFS= read -r a && IFS= read -r b; do printf '%s:%s ' "$(printf '%s' "$a" | base64 -w 0)" "$(printf '%s' "$b" | base64 -w 0)"; done)
+    # shellcheck disable=SC2086
+    status "changed_$1" "$2" "$(md5sum < "$2" | cut -d' ' -f1)" $lines
     return 0
   fi
   rm -f "$tmp"
   return 1
 }
-# a part's change put back (the file as it was, moved in place whole), or kept for good. either way the copy goes
+# a part's change put back, or kept for good. either way the copy goes. the file as it wrote it: the copy back whole.
+# changed since (in dockge meanwhile): only its own lines back, where they're still as it wrote them
 undo_change() {
-  local tmp
+  local tmp map x
   # shellcheck disable=SC2046
   set -- "$1" $(get "changed_$1")
   [ -n "$2" ] && [ -f "$2.before-update" ] && [ ! -L "$2" ] || return 0
   tmp=$(mktemp "$2.XXXXXX") || return 1
-  if cp -p "$2.before-update" "$tmp" && mv "$tmp" "$2"; then
-    log "$1: $2 back as it was"
+  if [ "$(md5sum < "$2" | cut -d' ' -f1)" = "$3" ]; then
+    if cp -p "$2.before-update" "$tmp" && mv "$tmp" "$2"; then
+      log "$1: $2 back as it was"
+      keep_change "$1"
+      return 0
+    fi
+  elif [ $# -le 3 ]; then
+    log "$1: $2 was changed since, left as it is"
+    rm -f "$tmp"
     keep_change "$1"
     return 0
+  else
+    map=$(mktemp)
+    for x in $(get "changed_$1" | cut -d' ' -f3-); do
+      printf '%s\n%s\n' "$(printf '%s' "${x%%:*}" | base64 -d)" "$(printf '%s' "${x#*:}" | base64 -d)"
+    done > "$map"
+    if awk 'NR == FNR {if (FNR % 2) b = $0; else back[$0] = b; next} ($0 in back) {print back[$0]; next} {print}' "$map" "$2" > "$tmp" &&
+      chown "$(stat -c %u:%g "$2")" "$tmp" && chmod "$(stat -c %a "$2")" "$tmp" && mv "$tmp" "$2"; then
+      rm -f "$map"
+      log "$1: $2 was changed since, only its own change put back"
+      keep_change "$1"
+      return 0
+    fi
+    rm -f "$map"
   fi
   rm -f "$tmp"
   return 1
@@ -306,15 +375,35 @@ keep_change() {
 
 # --- images kept to go back to ---
 
-# the image a part ran before, kept under a tag of its own
+# the image part $3 ran before, kept under a tag of its own in its repository $1: rb-<part>-<time>-<image>
 keep_back() {
-  t=$1:rb-$(now)-$(echo "$2" | sed 's/^sha256://' | cut -c1-8)
+  t=$1:rb-$3-$(now)-$(echo "$2" | sed 's/^sha256://' | cut -c1-8)
   docker tag "$2" "$t" && echo "$t"
 }
 # nothing changed after all: the tag back on the image kept, the rollback tag made for it gone
 undo_back() {
   docker tag "$1" "$2" 2> /dev/null
   docker rmi "$1" > /dev/null 2>&1
+}
+# a part's rollback tags in its repository $2, newest first: "<tag> <image id>" a line. its own, and the ones without a
+# part in them (rb-<time>-<image>) while no other part runs from that repository
+backs() {
+  local o old='|^rb-[0-9]'
+  for o in $(part_ids); do
+    [ "$o" != "$1" ] && [ "$(repo_of "$(ref_of "$(box "$o")")")" = "$2" ] && old=
+  done
+  docker images --no-trunc --format '{{.Tag}} {{.ID}}' "$2" | grep -E "^rb-$1-[0-9]$old" |
+    awk '{t = $1; sub(/^rb-([a-z][a-z0-9_]*-)?/, "", t); print t + 0, $0}' | sort -k1,1nr | cut -d' ' -f2-
+}
+# a tag a part ran from before it moved to another one (a channel, a stable release), gone once nothing names it: no
+# compose file of the stacks, no container. the image itself goes only with its last tag (its rollback tag keeps it)
+drop_tag() {
+  local r
+  r=$(printf '%s\n' "$1" | awk '{sub(/^docker\.io\/library\//, ""); sub(/^docker\.io\//, ""); n = split($0, p, "/"); if (!index(p[n], ":")) $0 = $0 ":latest"; print}')
+  case " $(compose_refs | tr '\n' ' ') $(docker ps -aq | xargs -r docker inspect -f '{{.Config.Image}}' 2>/dev/null | tr '\n' ' ') " in
+  *" $1 "* | *" $r "*) return 0 ;;
+  esac
+  docker rmi "$1" > /dev/null 2>&1 && log "removed $1, nothing uses it any more"
 }
 
 # --- the progress, for the bars ---
@@ -451,7 +540,7 @@ available() {
     s=unknown
   elif known_as "$img" | grep -q "@$remote"; then
     s=no
-  elif [ "$remote" = "$(get "$1_failed")" ]; then
+  elif failed_has "$1" "$remote"; then
     s=failed
   elif [ "$cur" != "$3" ]; then
     s=switch
@@ -465,14 +554,14 @@ available() {
 
 # a part started on what its tag says now, then seen running on the image $2 and answering (check_of), within two
 # minutes, a built one within five, OpenMower within six. 1 when compose can't start it or it doesn't answer. never
-# built here: the image is there already (pulled, built or the one before), a planner with pull_policy: build would
-# be built once more and run on an image nobody checked
+# built or pulled here: the image is there already (pulled, built or the one before), a planner with pull_policy: build
+# would be built once more and run on an image nobody checked, one with pull_policy: always would get the new one back
 restart() {
   local force=
   progress "$1" restart
   # (one that runs an image that isn't there any more is made anew: compose takes it for the same and leaves it)
   docker image inspect "$(image_of "$(box "$1")")" > /dev/null 2>&1 || force=1
-  compose $T_UP "$(box "$1")" up -d --no-deps --no-build ${force:+--force-recreate} "$(service "$(box "$1")")" >> "$LOG" 2>&1 || { log "$1: compose couldn't start it"; return 1; }
+  compose $T_UP "$(box "$1")" up -d --no-deps --no-build --pull never ${force:+--force-recreate} "$(service "$(box "$1")")" >> "$LOG" 2>&1 || { log "$1: compose couldn't start it"; return 1; }
   seen "$1" "$2"
 }
 seen() {
@@ -481,10 +570,10 @@ seen() {
   how=$(check_of "$1")
   # (a healthcheck may take a while between its tries)
   case $(kind "$1"):$how in openmower:*) end=360 ;; build:* | *:health) end=300 ;; *) end=120 ;; esac
-  end=$(($(now) + end))
+  end=$(($(up) + end))
   ok=0
   started=
-  while [ "$(now)" -lt "$end" ]; do
+  while [ "$(up)" -lt "$end" ]; do
     sleep 10
     progress "$1" wait
     if [ "$(image_of "$c")" = "$2" ] && running "$c"; then
@@ -510,12 +599,17 @@ seen() {
 # the new version of a part didn't run: back to the one before ($2, a rollback tag) under its tag ($3), the file it
 # changed put back, started again. OpenMower and builds only while OpenMower doesn't drive the mower, else left for
 # the next run to look at (1). the version left out from now on ($4)
-# whatever the mower does, it may be started again: an app only to look at, or one set to update with the mower out
-harmless() { case $1 in mowbite | xtechapp | openmowerapp) return 0 ;; esac; [ "$(gate "$1")" = none ]; }
+# whatever the mower does, it may be started again: an app only to look at, the mqtt broker (the mower drives on without
+# it, and without it nothing says the mower is idle), or one set to update with the mower out
+harmless() {
+  case $1 in mowbite | xtechapp | openmowerapp) return 0 ;; esac
+  case $(repo_of "$(ref_of "$(box "$1")")") in *mosquitto*) return 0 ;; esac
+  [ "$(gate "$1")" = none ]
+}
 go_back() {
   if ! harmless "$1" && ! quiet; then
     log "$1: didn't run as it should, but the mower isn't idle (or there's no broker): nothing restarted, looked at again next time"
-    status "$1" unconfirmed
+    outcome "$1" unconfirmed
     return 1
   fi
   log "$1: didn't run as it should, back to $2"
@@ -523,7 +617,7 @@ go_back() {
   [ -n "$4" ] && status "$1_failed" "$4"
   docker tag "$2" "$3"
   undo_change "$1"
-  if restart "$1" "$(id_of "$2")"; then status "$1" rolled_back; else status "$1" error rollback; fi
+  if restart "$1" "$(id_of "$2")"; then outcome "$1" rolled_back; else outcome "$1" error rollback; fi
   status "pending_$1"
   return 0
 }
@@ -531,8 +625,10 @@ go_back() {
 # the parts restarted on a new version and not seen running yet (a run stopped right then, or the mower wasn't idle):
 # started if a restart was cut off, then seen running, or back to the one before
 settle() {
+  local p x
   for p in $(part_ids); do
-    # (pending: the rollback tag, the tag it goes back under, the image it has to run on, what's left out when it doesn't)
+    # (pending: the rollback tag, the tag it goes back under, the image it has to run on, what's left out when it doesn't:
+    # an image id and its digest, or a commit and the id of its base)
     # shellcheck disable=SC2046
     set -- $(get "pending_$p")
     [ -n "$1" ] || continue
@@ -545,9 +641,16 @@ settle() {
       log "$p: runs"
       keep_change "$p"
       status "pending_$p"
-      status "$p" updated "$(now)"
+      outcome "$p" updated "$(now)"
+      if [ "$p" = openmower ]; then
+        x=$(prev_of "$1" "$(repo_of "$2")")
+        status openmower_prev ${x:+"$x"}
+        rebuild_on_om "$(ref_of "$OM")"
+      fi
+      # (another tag than before, a channel or a stable release: the one before goes once nothing names it)
+      [ "$(ref_of "$(box "$p")")" = "$2" ] || drop_tag "$2"
     else
-      go_back "$p" "$1" "$2" "${4:-$(id_of "$2")}"
+      go_back "$p" "$1" "$2" "${4:-$(id_of "$2")}${5:+ $5}"
     fi
   done
   status progress
@@ -592,7 +695,7 @@ check_image() {
   else
     status "$1_stable"
   fi
-  if [ -n "$(newest_back "$repo" "$(image_of "$c")")" ]; then status "$1_back" yes; else status "$1_back" no; fi
+  if [ -n "$(newest_back "$1" "$repo" "$(image_of "$c")")" ]; then status "$1_back" yes; else status "$1_back" no; fi
   target=$(image_target "$1")
   # stable older than what runs (a beta after the last release): nothing to go to, it stays until a newer stable
   if [ "$(channel "$1")" = stable ] && [ -n "$st" ] && older "$st" "$(version_of "$1")"; then
@@ -603,11 +706,18 @@ check_image() {
   status "$1_stable_older"
   if [ -n "$target" ]; then available "$1" "$c" "$target"; else status "$1_available" unknown none; fi
 }
-# what a part runs in words: MowBite's own version, else its image's tag
+# what a part runs in words: MowBite's own version, else its image's tag. MowBite without an answer right now: the
+# version it said last on the same image (mowbite_version <image> <version>), the tag only for one that never says it
 version_of() {
-  local v
+  local v img
   if [ "$1" = mowbite ]; then
+    img=$(image_of "$(box "$1")")
     v=$(wget -q -T 5 -O - "$(url_of "$(box "$1")" :8080/cgi-bin/version)" 2>/dev/null | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+    if [ -n "$v" ]; then
+      [ "$(get mowbite_version)" = "$img $v" ] || status mowbite_version "$img" "$v"
+    else
+      v=$(get mowbite_version | sed -n "s/^$img //p")
+    fi
     [ -n "$v" ] && echo "$v" && return
   fi
   ref_of "$(box "$1")" | sed 's/.*://'
@@ -630,33 +740,57 @@ image_target() {
     echo "${v:-$ref}"
   fi
 }
-# a part's newest rollback tag on another image than the one that runs ($2), to go back to by hand
+# the newest rollback tag of part $1 (in its repository $2) on another image than the one that runs ($3), to go back to
+# by hand
 newest_back() {
-  docker images --no-trunc --format '{{.Tag}} {{.ID}}' "$1" | grep '^rb-[0-9]*-' | sort -t- -k2,2nr | while read -r t id; do
-    [ "$id" = "$2" ] || { echo "$t"; break; }
+  backs "$1" "$2" | while read -r t id; do
+    [ "$id" = "$3" ] || { echo "$t"; break; }
   done
 }
 
 update_image() {
-  local p="$1" c current repo before target back pulled file v need
+  local p="$1" c current repo before target back pulled file v need remote d
   c=$(box "$p")
   progress "$p" prepare
-  running "$c" || { log "$p: not running, left as it is"; status "$p" stopped; return 0; }
+  running "$c" || { log "$p: not running, left as it is"; outcome "$p" stopped; return 0; }
   current=$(ref_of "$c")
   repo=$(repo_of "$current")
   before=$(image_of "$c")
   # (asked for, it's the same either way: no need to ask the registry)
-  if [ -z "$MANUAL" ] && built_here "$before"; then
-    log "$p: runs an image built here, left as it is (only updated when asked)"
-    status "$p" local
-    return 0
+  if [ -z "$MANUAL" ]; then
+    built_here "$before"
+    case $? in
+    0)
+      log "$p: runs an image built here, left as it is (only updated when asked)"
+      outcome "$p" local
+      return 0
+      ;;
+    2)
+      log "$p: no answer from its registry, left as it is"
+      outcome "$p" error registry
+      return 1
+      ;;
+    esac
   fi
   target=$(image_target "$p")
-  [ -n "$target" ] || { log "$p: no stable release"; status "$p" error no_stable; return 1; }
+  [ -n "$target" ] || { log "$p: no stable release"; outcome "$p" error no_stable; return 1; }
   # never back to an older version by picking stable: that one stays until a newer stable is out
   if [ "$(channel "$p")" = stable ] && older "${target##*:}" "$(version_of "$p")"; then
     log "$p: stable ${target##*:} is older than $(version_of "$p") that runs, it stays as it is"
-    status "$p" stable_older "${target##*:}"
+    outcome "$p" stable_older "${target##*:}"
+    return 0
+  fi
+  # nothing downloaded for what runs already, or for a version that didn't start before
+  remote=$(remote_digest "$target")
+  if [ -n "$remote" ] && [ "$target" = "$current" ] && known_as "$before" | grep -q "@$remote"; then
+    outcome "$p" current
+    # (its card right away, not only after the next look)
+    status "${p}_available" no "$target"
+    return 0
+  fi
+  if failed_has "$p" "$remote"; then
+    log "$p: not again, $target didn't start before"
+    outcome "$p" skipped_failed
     return 0
   fi
   # room for what it has to download (its missing layers x5, else as much as the image that runs) and some to spare.
@@ -664,30 +798,31 @@ update_image() {
   layers "$target" > "$STATE/layers"
   need=$(need_mb "$target" "$before" "$STATE/layers")
   [ -n "$need" ] || need=$(($(docker image inspect -f '{{.Size}}' "$before" 2>/dev/null || echo 0) / 1048576))
-  room_for $((need + ROOM_APP)) || { log "$p: not enough room (needs $need MB and $ROOM_APP to spare, $(free_mb) MB free), nothing changed"; status "$p" nospace "$need" "$(free_mb)"; return 1; }
+  room_for $((need + ROOM_APP)) || { log "$p: not enough room (needs $need MB and $ROOM_APP to spare, $(free_mb) MB free), nothing changed"; outcome "$p" nospace "$need" "$(free_mb)"; return 1; }
   # kept before anything moves its tag (an image only built here is gone once its tag is on another one)
-  back=$(keep_back "$repo" "$before")
-  [ -n "$back" ] || { log "$p: the version before can't be kept, nothing changed"; status "$p" error keep; return 1; }
+  back=$(keep_back "$repo" "$before" "$p")
+  [ -n "$back" ] || { log "$p: the version before can't be kept, nothing changed"; outcome "$p" error keep; return 1; }
   with_progress "$p" "$(gate "$p")" pull_image "$target"
   case $? in
   0) ;;
   2) undo_back "$back" "$current" && return 2 ;;
-  *) log "$p: pull of $target failed"; undo_back "$back" "$current"; status "$p" error pull; return 1 ;;
+  *) log "$p: pull of $target failed"; undo_back "$back" "$current"; outcome "$p" error pull; return 1 ;;
   esac
   pulled=$(id_of "$target")
   if [ "$pulled" = "$before" ] && [ "$target" = "$current" ]; then
     undo_back "$back" "$current"
-    status "$p" current
-    # (its card right away, not only after the next look)
+    outcome "$p" current
     status "${p}_available" no "$target"
     return 0
   fi
-  if [ "$pulled" = "$(get "${p}_failed")" ]; then
+  if failed_has "$p" "$pulled"; then
     log "$p: not again, $target didn't start before"
     undo_back "$back" "$current"
-    status "$p" skipped_failed
+    outcome "$p" skipped_failed
     return 0
   fi
+  # (left out when it doesn't start: its id, and the digest the registry knows it by)
+  d=$(digest_of "$pulled" "$(repo_of "$target")")
   log "$p: kept the version before as $back"
   if [ "$target" != "$current" ]; then
     # (the tag it had before stable, to come back to on beta)
@@ -697,14 +832,14 @@ update_image() {
     if [ -z "$file" ] || ! change_file "$p" "$file" "s|^\([[:space:]]*image:[[:space:]]*\)$(re "$current")[[:space:]]*\$|\1$target|"; then
       log "$p: the compose file can't be changed, nothing changed"
       undo_back "$back" "$current"
-      status "$p" error compose
+      outcome "$p" error compose
       return 1
     fi
     if ! grep -q "^[[:space:]]*image:[[:space:]]*$(re "$target")[[:space:]]*\$" "$file"; then
       log "$p: the compose file didn't take the new image, nothing changed"
       undo_change "$p"
       undo_back "$back" "$current"
-      status "$p" error compose
+      outcome "$p" error compose
       return 1
     fi
   fi
@@ -716,17 +851,18 @@ update_image() {
     return 2
   fi
   log "$p: $current -> $target"
-  status "pending_$p" "$back" "$current" "$pulled" "$pulled"
+  status "pending_$p" "$back" "$current" "$pulled" "$pulled" ${d:+"$d"}
   if restart "$p" "$pulled"; then
     v=$(version_of "$p")
     log "$p: updated to $v"
     keep_change "$p"
     status "pending_$p"
-    status "$p" updated "$(now)" "$v"
+    outcome "$p" updated "$(now)" "$v"
     status "${p}_available" no "$target"
+    [ "$target" = "$current" ] || drop_tag "$current"
     return 0
   fi
-  go_back "$p" "$back" "$current" "$pulled"
+  go_back "$p" "$back" "$current" "$pulled${d:+ $d}"
   # a version picked that didn't start: its image isn't kept for nothing
   [ "$target" = "$current" ] || docker rmi "$target" > /dev/null 2>&1
   return 1
@@ -735,31 +871,32 @@ update_image() {
 # back to the version before, by hand: the newest rollback tag on another image, under the tag that runs now. what ran
 # is kept the same way and left out of the automatic updates. it comes back when the one before doesn't answer
 back_image() {
-  local p="$1" c current repo before to now_back
+  local p="$1" c current repo before to now_back d
   c=$(box "$p")
   current=$(ref_of "$c")
   repo=$(repo_of "$current")
   before=$(image_of "$c")
-  to=$(newest_back "$repo" "$before")
-  [ -n "$to" ] || { log "$p: no version before to go back to"; status "$p" error no_back; return 1; }
+  to=$(newest_back "$p" "$repo" "$before")
+  [ -n "$to" ] || { log "$p: no version before to go back to"; outcome "$p" error no_back; return 1; }
   progress "$p" back
-  now_back=$(keep_back "$repo" "$before")
-  [ -n "$now_back" ] || { status "$p" error keep; return 1; }
+  now_back=$(keep_back "$repo" "$before" "$p")
+  [ -n "$now_back" ] || { outcome "$p" error keep; return 1; }
   log "$p: kept the version that ran as $now_back, back to $to"
   docker tag "$repo:$to" "$current"
   if restart "$p" "$(id_of "$repo:$to")"; then
     docker rmi "$repo:$to" > /dev/null 2>&1
-    status "${p}_failed" "$before"
-    status "$p" back "$(now)" "$(version_of "$p")"
+    d=$(digest_of "$before" "$repo")
+    status "${p}_failed" "$before" ${d:+"$d"}
+    outcome "$p" back "$(now)" "$(version_of "$p")"
     return 0
   fi
   log "$p: the version before didn't answer, again the one that ran"
   docker tag "$now_back" "$current"
   if restart "$p" "$before"; then
     docker rmi "$now_back" > /dev/null 2>&1
-    status "$p" error back
+    outcome "$p" error back
   else
-    status "$p" error rollback
+    outcome "$p" error rollback
   fi
   return 1
 }
@@ -773,9 +910,19 @@ set_om_version() {
   undo_change openmower
   return 1
 }
+# its .env saved with another version than the one that runs gets the one that runs first (update_openmower), noted as
+# openmower_saved <saved> <the one that runs>: the saved one back when nothing was restarted after all, unless the .env
+# was changed since (dockge meanwhile)
+om_saved_back() {
+  # shellcheck disable=SC2046
+  set -- $(get openmower_saved)
+  status openmower_saved
+  [ -n "$2" ] && [ "$(om_version)" = "$2" ] || return 0
+  set_om_version "$1" && keep_change openmower && log "openmower: VERSION in $(om_env) back to $1, as it was saved"
+}
 
 check_openmower() {
-  local cur
+  local cur x
   if [ "$(kind openmower)" = os ]; then
     status openmower_running os
     status openmower_available os
@@ -785,34 +932,68 @@ check_openmower() {
   status openmower_running "${cur##*:}" "$(day_of "$(image_of "$OM")")"
   status openmower_env "$(om_version)"
   available openmower "$OM" "$(repo_of "$cur"):$(om_channel)"
+  # (the version before its last update, while its registry still has it)
+  x=$(get openmower_prev)
+  if [ -n "$x" ] && [ "$(repo_of "$x")" = "$(repo_of "$cur")" ] && ! known_as "$(image_of "$OM")" | grep -q "@${x#*@}" && in_registry "$x"; then
+    status openmower_back yes
+  else
+    status openmower_back no
+  fi
+}
+
+# what's built on OpenMower's image ($1, its tag), built again on the one it runs now: after its update ($2 new), and
+# later for one that didn't get to it (stopped halfway, the mower out). without $2 only one this updater built before,
+# or one that was due on that image (<part>_rebuild: its id, noted before it waits). never while the mower isn't idle
+# in the dock (a build takes its cpu): 2 then
+rebuild_on_om() {
+  local p base rc=0
+  for p in $(part_ids); do
+    [ "$(kind "$p")" = build ] && [ -z "$(get "pending_$p")" ] || continue
+    base=$(base_of "$(box "$p")")
+    if [ "$base" != "$1" ]; then
+      [ -n "$base" ] && [ -n "$2" ] && log "$p: built on $base, not on $1, left as it is"
+      continue
+    fi
+    [ "$(get "${p}_base_id")" != "$(id_of "$1")" ] || continue
+    [ -n "$2" ] || [ -n "$(get "${p}_base_id")" ] || [ "$(get "${p}_rebuild")" = "$(id_of "$1")" ] || continue
+    status "${p}_rebuild" "$(id_of "$1")"
+    docked || { log "$p: the mower isn't idle in the dock, built on OpenMower's new version later"; return 2; }
+    build "$p" after_openmower
+    [ $? -eq 2 ] && rc=2
+    # (not once more in the same run)
+    rebuilt="$rebuilt $p"
+  done
+  return $rc
 }
 
 update_openmower() {
-  local ref repo before old_version want target remote need free back rc base
+  local ref repo before old_version want target remote need free back rc prev d
   [ "$(kind openmower)" = openmower ] || return 0
   progress openmower prepare
-  running "$OM" || { log "openmower: not running, left as it is"; status openmower stopped; return 0; }
+  running "$OM" || { log "openmower: not running, left as it is"; outcome openmower stopped; return 0; }
   ref=$(ref_of "$OM")
   repo=$(repo_of "$ref")
   before=$(image_of "$OM")
   # a build of its own can't be downloaded again: never replaced by itself
   if [ -z "$MANUAL" ] && built_here "$before"; then
     log "openmower: runs an image built here, left as it is (only updated when asked)"
-    status openmower local
+    outcome openmower local
     return 0
   fi
   old_version=$(om_version)
-  [ -n "$old_version" ] || { log "openmower: VERSION in $(om_env) can't be read, nothing changed"; status openmower error env; return 1; }
+  [ -n "$old_version" ] || { log "openmower: VERSION in $(om_env) can't be read, nothing changed"; outcome openmower error env; return 1; }
   want=$(om_channel)
   target=$repo:$want
   remote=$(remote_digest "$target")
-  [ -n "$remote" ] || { log "openmower: can't reach the registry for $target"; status openmower error registry; return 1; }
+  [ -n "$remote" ] || { log "openmower: can't reach the registry for $target"; outcome openmower error registry; return 1; }
   if [ "$target" = "$ref" ] && known_as "$before" | grep -q "@$remote"; then
-    status openmower current
+    outcome openmower current
     status openmower_available no "$target"
-    return 0
+    # (what's built on it and didn't get to it after its update)
+    rebuild_on_om "$target"
+    return
   fi
-  [ "$remote" = "$(get openmower_failed)" ] && { log "openmower: not again, $target didn't come up before"; status openmower skipped_failed; return 0; }
+  failed_has openmower "$remote" && { log "openmower: not again, $target didn't come up before"; outcome openmower skipped_failed; return 0; }
   [ "$want" != edge ] && exists "$PLANNER" && log "openmower: $want has no OM_PLANNER=external, the MowBite Planner won't work with it"
   # (the layers looked up once: for the room and the bar)
   layers "$target" > "$STATE/layers"
@@ -820,60 +1001,133 @@ update_openmower() {
   free=$(free_mb)
   if [ -z "$need" ] || [ -z "$free" ] || [ $((need + 1024)) -gt "$free" ]; then
     log "openmower: not enough room for $target (needs ${need:-?} MB and 1 GB to spare, ${free:-?} MB free), it stays as it is"
-    status openmower nospace "${need:-?}" "${free:-?}"
+    outcome openmower nospace "${need:-?}" "${free:-?}"
     return 1
   fi
-  back=$(keep_back "$repo" "$before")
-  [ -n "$back" ] || { log "openmower: the version before can't be kept, nothing changed"; status openmower error keep; return 1; }
+  back=$(keep_back "$repo" "$before" openmower)
+  [ -n "$back" ] || { log "openmower: the version before can't be kept, nothing changed"; outcome openmower error keep; return 1; }
   log "openmower: kept the version before as $back"
+  # its .env saved with another version than the one that runs (not started since): first the one that runs, so that's
+  # what a way back puts there. the saved one comes back when it isn't restarted (om_saved_back)
+  if [ "${ref##*:}" != "$old_version" ] && [ "$repo:${ref##*:}" = "$ref" ]; then
+    if ! set_om_version "${ref##*:}"; then
+      log "openmower: VERSION in $(om_env) can't be changed, nothing changed"
+      undo_back "$back" "$ref"
+      outcome openmower error env
+      return 1
+    fi
+    keep_change openmower
+    status openmower_saved "$old_version" "${ref##*:}"
+    old_version=${ref##*:}
+  fi
   if [ "$want" != "$old_version" ] && ! set_om_version "$want"; then
     log "openmower: VERSION in $(om_env) can't be changed, nothing changed"
+    om_saved_back
     undo_back "$back" "$ref"
-    status openmower error env
+    outcome openmower error env
     return 1
   fi
   log "openmower: $ref -> $target (needs $need MB, $free MB free)"
   # only OpenMower itself: the stack's other containers (its app, the broker) stay as they are
   with_progress openmower mower compose $T_PULL "$OM" --progress json pull "$(service "$OM")"
   rc=$?
-  # the last word before it restarts
+  # the last word before it restarts: still in the dock, and its .env still says that version (dockge meanwhile)
   if [ $rc -eq 0 ] && ! docked; then
     log "openmower: the mower left the dock, it stays as it is"
     rc=2
+  elif [ $rc -eq 0 ] && [ "$(om_version)" != "$want" ]; then
+    log "openmower: VERSION in $(om_env) was changed meanwhile, it stays as it is"
+    rc=3
   fi
   if [ $rc -ne 0 ]; then
-    [ $rc -eq 2 ] || log "openmower: pull failed, it stays as it is"
+    case $rc in 2 | 3) ;; *) log "openmower: pull failed, it stays as it is" ;; esac
     undo_change openmower
+    om_saved_back
     undo_back "$back" "$ref"
     # a version picked that didn't come: its image isn't kept for nothing
     [ "$target" = "$ref" ] || docker rmi "$target" > /dev/null 2>&1
-    [ $rc -eq 2 ] && return 2
-    status openmower error pull
+    case $rc in
+    2) return 2 ;;
+    3) outcome openmower error env ;;
+    *) outcome openmower error pull ;;
+    esac
     return 1
   fi
-  status pending_openmower "$back" "$ref" "$(id_of "$target")" "$remote"
-  if restart openmower "$(id_of "$target")"; then
+  # (its way back by hand: the version before, from its registry again)
+  prev=$(prev_of "$before" "$repo")
+  d=$(id_of "$target")
+  status pending_openmower "$back" "$ref" "$d" "$remote"
+  # (from here its .env keeps the version that ran, for the way back)
+  status openmower_saved
+  if restart openmower "$d"; then
     log "openmower: updated to $target"
     keep_change openmower
     status pending_openmower
-    status openmower updated "$(now)" "$want"
+    status openmower_prev ${prev:+"$prev"}
+    outcome openmower updated "$(now)" "$want"
     status openmower_available no "$target"
+    [ "$target" = "$ref" ] || drop_tag "$ref"
     # what's built on OpenMower's image: again on the new one
-    rc=0
-    for p in $(part_ids); do
-      [ "$(kind "$p")" = build ] || continue
-      base=$(base_of "$(box "$p")")
-      if [ "$base" = "$target" ]; then
-        build "$p" after_openmower
-        [ $? -eq 2 ] && rc=2
-      else
-        [ -n "$base" ] && log "$p: built on $base, not on $target, left as it is"
-      fi
-    done
-    return $rc
+    rebuild_on_om "$target" new
+    return
   fi
-  go_back openmower "$back" "$ref" "$remote" || return 1
+  go_back openmower "$back" "$ref" "$d $remote" || return 1
   [ "$target" = "$ref" ] || docker rmi "$target" > /dev/null 2>&1
+  return 1
+}
+
+# back to the version before its last update, by hand: no copy of it is kept (GBs), it comes from its registry again by
+# its digest (openmower_prev) under the tag that runs, as long as the registry has it. the version that ran is left out
+# of the automatic updates, it runs again when the one before doesn't answer
+back_openmower() {
+  local ref repo before prev need free back d
+  ref=$(ref_of "$OM")
+  repo=$(repo_of "$ref")
+  before=$(image_of "$OM")
+  prev=$(get openmower_prev)
+  if [ -z "$prev" ] || [ "$(repo_of "$prev")" != "$repo" ] || known_as "$before" | grep -q "@${prev#*@}" || ! in_registry "$prev"; then
+    log "openmower: no version before to go back to"
+    outcome openmower error no_back
+    return 1
+  fi
+  progress openmower prepare
+  layers "$prev" > "$STATE/layers"
+  need=$(need_mb "$prev" "$before" "$STATE/layers")
+  free=$(free_mb)
+  if [ -z "$need" ] || [ -z "$free" ] || [ $((need + 1024)) -gt "$free" ]; then
+    log "openmower: not enough room for the version before (needs ${need:-?} MB and 1 GB to spare, ${free:-?} MB free), it stays as it is"
+    outcome openmower nospace "${need:-?}" "${free:-?}"
+    return 1
+  fi
+  back=$(keep_back "$repo" "$before" openmower)
+  [ -n "$back" ] || { outcome openmower error keep; return 1; }
+  with_progress openmower mower pull_image "$prev"
+  case $? in
+  0) ;;
+  2) undo_back "$back" "$ref" && return 2 ;;
+  *) log "openmower: pull of $prev failed"; undo_back "$back" "$ref"; outcome openmower error pull; return 1 ;;
+  esac
+  docked || { log "openmower: the mower left the dock, it stays as it is"; undo_back "$back" "$ref"; return 2; }
+  log "openmower: kept the version that ran as $back, back to $prev"
+  d=$(digest_of "$before" "$repo")
+  docker tag "$prev" "$ref"
+  if restart openmower "$(id_of "$prev")"; then
+    # (the one it left is GBs, none is kept, as after an update)
+    docker rmi "$back" > /dev/null 2>&1
+    status openmower_failed "$before" ${d:+"$d"}
+    status openmower_prev
+    outcome openmower back "$(now)" "${ref##*:}"
+    rebuild_on_om "$ref" new
+    return 0
+  fi
+  log "openmower: the version before didn't answer, again the one that ran"
+  docker tag "$back" "$ref"
+  if restart openmower "$before"; then
+    docker rmi "$back" > /dev/null 2>&1
+    outcome openmower error back
+  else
+    outcome openmower error rollback
+  fi
   return 1
 }
 
@@ -882,7 +1136,7 @@ update_openmower() {
 # the newest commit of its branch
 commit_of() {
   local src v
-  src=$(source_of "$(box "$1")")
+  src=$(source_of "$(context_of "$(box "$1")")")
   [ -n "$src" ] || return
   # shellcheck disable=SC2086
   set -- $src
@@ -893,27 +1147,37 @@ commit_of() {
 }
 # the commit it was last built from here, while it still runs that image
 built_of() { [ "$(get "$1_image")" = "$(image_of "$(box "$1")")" ] && get "$1_built"; }
-# the image it was built on is still the one its base tag names
-base_same() {
-  local base
-  base=$(base_of "$(box "$1")")
-  [ -z "$base" ] || [ "$(get "$1_base_id")" = "$(id_of "$base")" ]
-}
+# the image it was built on is still the one its base tag ($2) names
+base_same() { [ -z "$2" ] || [ "$(get "$1_base_id")" = "$(id_of "$2")" ]; }
+
+# what of a build is left out when it doesn't start: the commit with the id of the image it's built on (that one changed,
+# OpenMower's new version, it's another build), as <part>_failed says it
+build_key() { echo "$1${2:+ $(id_of "$2")}"; }
 
 # built again from its own context and started. never --pull, and only when the image it's built on is here (for the
-# planner: OpenMower's, it has to be built on the one that runs, a missing one would come down whole)
+# planner: OpenMower's, it has to be built on the one that runs, a missing one would come down whole). one stopped by
+# hand is made anew on it and stays stopped
 build() {
-  local p="$1" c base commit img before ran back rc built
+  local p="$1" c base commit img before ran back rc built fail stopped=
   c=$(box "$p")
   progress "$p" prepare
   base=$(base_of "$c")
   if [ -n "$base" ] && ! docker image inspect "$base" > /dev/null 2>&1; then
     log "$p: its base $base isn't here, not built (it would download it whole)"
-    status "$p" error base_missing
+    outcome "$p" error base_missing
     return 1
   fi
-  room_for $ROOM_BUILD || { log "$p: less than $ROOM_BUILD MB free, not built"; status "$p" nospace $ROOM_BUILD "$(free_mb)"; return 1; }
+  room_for $ROOM_BUILD || { log "$p: less than $ROOM_BUILD MB free, not built"; outcome "$p" nospace $ROOM_BUILD "$(free_mb)"; return 1; }
   commit=$(commit_of "$p")
+  fail=
+  [ -n "$commit" ] && fail=$(build_key "$commit" "$base")
+  # (also the one after OpenMower's update: the same commit on the same base didn't start before)
+  if [ -n "$fail" ] && [ "$fail" = "$(get "${p}_failed")" ]; then
+    log "$p: not again, $(echo "$commit" | cut -c1-7) didn't start before on this base"
+    outcome "$p" skipped_failed
+    return 0
+  fi
+  case $(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null) in exited | created | dead) stopped=1 ;; esac
   img=$(ref_of "$c")
   before=$(image_of "$c")
   ran=$before
@@ -923,8 +1187,8 @@ build() {
     before=$(id_of "$img")
     [ -n "$before" ] && log "$p: the image it runs isn't there any more, the one its tag names is the way back"
   fi
-  back=$(keep_back "$(repo_of "$img")" "$before")
-  [ -n "$back" ] || { log "$p: the version before can't be kept, not built"; status "$p" error keep; return 1; }
+  back=$(keep_back "$(repo_of "$img")" "$before" "$p")
+  [ -n "$back" ] || { log "$p: the version before can't be kept, not built"; outcome "$p" error keep; return 1; }
   log "$p: kept the version before as $back, building ($2)"
   : > "$STATE/layers"
   with_progress "$p" "$(gate "$p")" compose $T_BUILD "$c" --progress json build "$(service "$c")"
@@ -937,7 +1201,7 @@ build() {
   if [ $rc -ne 0 ]; then
     undo_back "$back" "$img"
     [ $rc -eq 2 ] && return 2
-    status "$p" error build
+    outcome "$p" error build
     return 1
   fi
   built=$(id_of "$img")
@@ -947,32 +1211,45 @@ build() {
     log "$p: the same image as before, it keeps running"
     docker tag "$before" "$img"
     docker rmi "$back" > /dev/null 2>&1
+  elif [ -n "$stopped" ]; then
+    # (nothing to see run, and the one before isn't kept for it)
+    if ! compose $T_UP "$c" up --no-start --no-deps --no-build --pull never --force-recreate "$(service "$c")" >> "$LOG" 2>&1; then
+      log "$p: compose couldn't make it anew, the one before stays"
+      undo_back "$back" "$img"
+      outcome "$p" error compose
+      return 1
+    fi
+    docker rmi "$back" > /dev/null 2>&1
+    log "$p: made anew on its new build, stopped as it was"
   else
-    status "pending_$p" "$back" "$img" "$built" "$commit"
-    restart "$p" "$built" || { go_back "$p" "$back" "$img" "$commit"; return 1; }
+    # shellcheck disable=SC2086
+    status "pending_$p" "$back" "$img" "$built" $fail
+    restart "$p" "$built" || { go_back "$p" "$back" "$img" "$fail"; return 1; }
     status "pending_$p"
     log "$p: running again"
   fi
   status "$1_image" "$(image_of "$c")"
   status "$1_built" "$commit"
   [ -n "$base" ] && status "$1_base_id" "$(id_of "$base")"
-  status "$p" updated "$(now)" "$(echo "$commit" | cut -c1-7)"
+  status "$1_rebuild"
+  if [ -n "$stopped" ]; then outcome "$p" stopped; else outcome "$p" updated "$(now)" "$(echo "$commit" | cut -c1-7)"; fi
   [ -n "$commit" ] && status "${p}_available" no main
   return 0
 }
 
 check_build() {
-  local c built want
+  local c built want base
   c=$(box "$1")
   built=$(built_of "$1")
   status "$1_running" "${built:-?}" "$(day_of "$(image_of "$c")")"
   status "$1_source" github
   want=$(commit_of "$1")
+  base=$(base_of "$c")
   if [ -z "$want" ] || [ -z "$built" ]; then
     status "$1_available" unknown main
-  elif [ "$want" = "$built" ] && base_same "$1"; then
+  elif [ "$want" = "$built" ] && base_same "$1" "$base"; then
     status "$1_available" no main
-  elif [ "$want" = "$(get "$1_failed")" ]; then
+  elif [ "$(build_key "$want" "$base")" = "$(get "$1_failed")" ]; then
     status "$1_available" failed main
   else
     status "$1_available" yes main
@@ -980,18 +1257,19 @@ check_build() {
 }
 
 update_build() {
-  local want
+  local want base
   progress "$1" prepare
-  running "$(box "$1")" || { log "$1: not running, left as it is"; status "$1" stopped; return 0; }
+  running "$(box "$1")" || { log "$1: not running, left as it is"; outcome "$1" stopped; return 0; }
   want=$(commit_of "$1")
-  [ -n "$want" ] || { status "$1" error github; return 1; }
-  if [ "$want" = "$(built_of "$1")" ] && base_same "$1"; then
-    status "$1" current
+  [ -n "$want" ] || { outcome "$1" error github; return 1; }
+  base=$(base_of "$(box "$1")")
+  if [ "$want" = "$(built_of "$1")" ] && base_same "$1" "$base"; then
+    outcome "$1" current
     return 0
   fi
-  if [ "$want" = "$(get "$1_failed")" ] && base_same "$1"; then
+  if [ "$(build_key "$want" "$base")" = "$(get "$1_failed")" ]; then
     log "$1: not again, $(echo "$want" | cut -c1-7) didn't start before"
-    status "$1" skipped_failed
+    outcome "$1" skipped_failed
     return 0
   fi
   build "$1" "$(echo "$want" | cut -c1-7)"
@@ -1017,8 +1295,8 @@ update_part() {
   openmower) update_openmower ;;
   image) update_image "$1" ;;
   build) update_build "$1" ;;
-  local) status "$1" local ;;
-  os) status openmower os ;;
+  local) outcome "$1" local ;;
+  os) outcome openmower os ;;
   esac
 }
 
@@ -1028,21 +1306,13 @@ update_part() {
 # goes back, if nobody changed it since; a tag moved to an image that never started goes back on the one that runs; a
 # part it had restarted is looked at again (settle). nothing starts later on something nobody saw come up
 recover() {
+  local p c ref img tagged
   [ "$(get result)" = running ] || return 0
   log "the last run was stopped halfway, putting back what didn't run yet"
   for p in $(part_ids); do
-    # shellcheck disable=SC2046
-    set -- $(get "changed_$p")
-    [ -n "$1" ] || continue
-    if [ -n "$(get "pending_$p")" ]; then
-      :
-    elif [ "$(md5sum < "$1" 2>/dev/null | cut -d' ' -f1)" = "$2" ]; then
-      undo_change "$p"
-    else
-      log "$p: $1 was changed since, left as it is"
-      keep_change "$p"
-    fi
+    [ -n "$(get "changed_$p")" ] && [ -z "$(get "pending_$p")" ] && undo_change "$p"
   done
+  if [ -z "$(get pending_openmower)" ]; then om_saved_back; else status openmower_saved; fi
   for p in $(part_ids); do
     c=$(box "$p")
     [ "$c" != - ] && exists "$c" || continue
@@ -1062,8 +1332,9 @@ recover() {
 # --- room ---
 
 # what's on the disk that nothing needs: images no container uses (not even a stopped one) and no compose file names
-# with its tag or builds on, with the room each frees for real (its own layers), and the build cache. only listed here,
-# deleted only when asked (room_free), never on its own
+# with its tag or builds on, with the room each frees for real (its own layers), and the build cache. listed here,
+# deleted when asked (room_free). after a run tidy clears images without a name, the build cache nothing points to and
+# rollback tags beyond the ones kept by itself
 stacks_root() { dirname "$(label "$ME" project.working_dir)"; }
 # the images the stacks' compose files name or build on, their .env filled in (${VERSION:-edge} and the like)
 compose_refs() {
@@ -1100,19 +1371,25 @@ compose_refs() {
       }'
   done
 }
-# bytes from docker's sizes: 512B, 4.1kB, 12.3MB, 1.2GB
-bytes_awk='function bytes(s, n, u) { n = s + 0; u = s; sub(/^[0-9.]+/, "", u); if (u == "kB") n *= 1e3; else if (u == "MB") n *= 1e6; else if (u == "GB") n *= 1e9; else if (u == "TB") n *= 1e12; return int(n) }'
-# one line per image: img <id> <bytes> <its tags, comma separated, or -> <kind>, then: cache <bytes>
+# bytes from docker's sizes: 512B, 4.1kB, 12.3MB, 1.2GB, and a field of one of its json records
+bytes_awk='function bytes(s, n, u) { n = s + 0; u = s; sub(/^[0-9.]+/, "", u); if (u == "kB") n *= 1e3; else if (u == "MB") n *= 1e6; else if (u == "GB") n *= 1e9; else if (u == "TB") n *= 1e12; return int(n) }
+function field(k,    v) {
+  if (!match($0, "\"" k "\":\"[^\"]*\"")) return ""
+  v = substr($0, RSTART + length(k) + 4, RLENGTH - length(k) - 5); gsub(/\\u003c/, "<", v); gsub(/\\u003e/, ">", v)
+  return v
+}'
+# one line per image: img <id> <bytes> <its tags, comma separated, or -> <kind>, then: cache <bytes> (what clearing it
+# frees: the entries no image shares). the way back of a part not seen running yet isn't listed
 check_room() {
+  local df out p
   used=" $(docker ps -aq | xargs -r docker inspect -f '{{.Image}}' 2>/dev/null | tr '\n' ' ') "
-  named=" $(compose_refs | tr '\n' ' ') "
-  out=$(mktemp)
-  timeout $T_UP docker system df -v --format '{{json .Images}}' 2>/dev/null | sed 's/^\[//; s/\]$//; s/},{/}\n{/g' | awk -v used="$used" -v named="$named" "$bytes_awk"'
-    function field(k,    v) {
-      if (!match($0, "\"" k "\":\"[^\"]*\"")) return ""
-      v = substr($0, RSTART + length(k) + 4, RLENGTH - length(k) - 5); gsub(/\\u003c/, "<", v); gsub(/\\u003e/, ">", v)
-      return v
-    }
+  named=" $(compose_refs | tr '\n' ' ') $(for p in $(part_ids); do get "pending_$p" | cut -d' ' -f1; done | tr '\n' ' ') "
+  # (one look at docker's disk: the images, then the build cache)
+  df=$(mktemp)
+  timeout $T_UP docker system df -v --format '{{json .Images}}\n{{json .BuildCache}}' > "$df" 2>/dev/null
+  # (next to the list it replaces: moved in place whole, its page never reads half of it)
+  out=$(mktemp "$STATE/room.XXXXXX") || { rm -f "$df"; return; }
+  sed -n 1p "$df" | sed 's/^\[//; s/\]$//; s/},{/}\n{/g' | awk -v used="$used" -v named="$named" "$bytes_awk"'
     {
       id = field("ID"); repo = field("Repository"); tag = field("Tag"); ref = repo ":" tag
       if (id == "") next
@@ -1123,15 +1400,18 @@ check_room() {
       if (kind[id] == "" || kind[id] == "unused") kind[id] = k
     }
     END { for (id in size) if (!keep[id]) print "img", substr(id, 8, 12), size[id], (refs[id] == "" ? "-" : refs[id]), kind[id] }' > "$out"
-  echo "cache $(timeout $T_UP docker system df --format '{{.Type}}|{{.Size}}' 2>/dev/null | sed -n 's/^Build Cache|//p' | awk "$bytes_awk"'{ print bytes($0) }')" >> "$out"
+  echo "cache $(sed -n 2p "$df" | sed 's/^\[//; s/\]$//; s/},{/}\n{/g' | awk "$bytes_awk"'field("Shared") == "false" { s += bytes(field("Size")) } END { print s + 0 }')" >> "$out"
+  rm -f "$df"
   mv "$out" "$STATE/room"
 }
 
 # what was asked to delete: one image from the list (all its tags, never forced), all of them, or the build cache.
 # the list is made again first: only what still nothing needs goes
 room_free() {
+  alive
   before=$(free_mb)
   check_room
+  alive
   case $1 in
   cache)
     timeout $T_UP docker builder prune -af > /dev/null 2>&1
@@ -1140,6 +1420,7 @@ room_free() {
   img | all)
     grep '^img ' "$STATE/room" 2>/dev/null | while read -r _ id _ refs _; do
       [ "$1" = all ] || [ "$id" = "$2" ] || continue
+      alive
       if [ "$refs" = - ]; then
         docker rmi "$id" > /dev/null 2>&1 && log "room: removed image $id"
       else
@@ -1148,6 +1429,7 @@ room_free() {
     done
     ;;
   esac
+  alive
   check_room
   status disk_free "$(free_mb)"
   log "room: $(($(free_mb) - before)) MB more free, $(free_mb) MB free"
@@ -1157,11 +1439,13 @@ room_free() {
 
 # its own older rollback tags: of each part the newest few on other images than the one that runs (an app's: two, the
 # big ones: none), newest first by the time in the tag. not while a part waits to be seen running, and never one on an
-# image built here that can't be had again (a build's can: it's built from its source). tags it didn't make stay.
+# image built here that can't be had again (a build's can: it's built from its source), or while its registry doesn't
+# answer. tags it didn't make stay.
 # then what nothing uses and the build cache nothing points to
 tidy() {
   local p keep name repo run kept n seen_before
   for p in $(part_ids); do
+    alive
     name=$(box "$p")
     exists "$name" || continue
     case $(kind "$p") in
@@ -1173,7 +1457,7 @@ tidy() {
     [ -n "$(get "pending_$p")" ] && continue
     repo=$(repo_of "$(ref_of "$name")")
     run=$(image_of "$name")
-    docker images --no-trunc --format '{{.Tag}} {{.ID}}' "$repo" | grep '^rb-[0-9]*-' | sort -t- -k2,2nr | {
+    backs "$p" "$repo" | {
       kept=" "
       n=0
       while read -r t id; do
@@ -1181,7 +1465,7 @@ tidy() {
         if [ "$id" != "$run" ] && [ -z "$seen_before" ] && [ $n -lt "$keep" ]; then
           kept="$kept$id "
           n=$((n + 1))
-        elif [ "$(kind "$p")" != build ] && [ "$id" != "$run" ] && [ -z "$seen_before" ] && built_here "$id"; then
+        elif [ "$(kind "$p")" != build ] && [ "$id" != "$run" ] && [ -z "$seen_before" ] && { built_here "$id"; [ $? -ne 1 ]; }; then
           kept="$kept$id "
         else
           docker rmi "$repo:$t" > /dev/null 2>&1 && log "removed $repo:$t"
@@ -1191,7 +1475,9 @@ tidy() {
   done
   # (a test on a pc with images and builds of its own: PRUNE=0)
   if [ "${PRUNE:-1}" != 0 ]; then
+    alive
     freed=$(timeout $T_UP docker image prune -f 2>/dev/null | sed -n 's/^Total reclaimed space: //p')
+    alive
     cache=$(timeout $T_UP docker builder prune -f 2>/dev/null | sed -n 's/^Total: *//p')
   fi
   log "tidied up: images ${freed:-0B}, build cache ${cache:-0B}, $(free_mb) MB free"
@@ -1218,20 +1504,39 @@ check_self() {
 # ($1 manual): with the download on the bar and a word on its card when there's nothing new. at night: quiet, and an
 # image built here stays
 update_self() {
-  local me prev new root need rc was
+  local me prev new root need rc was remote n
   if ! in_compose "$ME"; then
-    [ -n "$1" ] && log "the updater doesn't run from a compose file, it can't update itself" && status updater error compose
+    [ -n "$1" ] && log "the updater doesn't run from a compose file, it can't update itself" && outcome updater error compose
     return
   fi
   me=$(ref_of "$ME")
-  [ -z "$1" ] && built_here "$(image_of "$ME")" && return
+  if [ -z "$1" ]; then
+    built_here "$(image_of "$ME")"
+    [ $? -eq 1 ] || return
+  fi
   # (asked for after the apps: its card shows it's on it)
   [ -n "$1" ] && [ -z "$(get taken)" ] && status taken "$(now)" self
+  # nothing downloaded for the version that runs, or one that didn't start before
+  remote=$(remote_digest "$me")
+  if [ -n "$remote" ] && known_as "$(image_of "$ME")" | grep -q "@$remote"; then
+    [ -n "$1" ] && log "the updater is up to date" && outcome updater current
+    check_self
+    return
+  fi
+  if failed_has updater "$remote"; then
+    [ -n "$1" ] && log "the updater: not again, this version didn't start before" && outcome updater skipped_failed
+    return
+  fi
   # the helper of its update a moment ago may still see it come up, with :previous as its way back: that one first.
   # (one that ended and stayed is cleared away, a running one can't be)
-  if docker container inspect mowbite-updater-self > /dev/null 2>&1; then
-    timeout 300 docker wait mowbite-updater-self > /dev/null 2>&1
-    docker rm mowbite-updater-self > /dev/null 2>&1
+  if docker container inspect "$SELF" > /dev/null 2>&1; then
+    n=0
+    while [ $n -lt 30 ] && running "$SELF"; do
+      alive
+      sleep 10
+      n=$((n + 1))
+    done
+    docker rm "$SELF" > /dev/null 2>&1
   fi
   # (the layers looked up once: for the room and the bar)
   layers "$me" > "$STATE/layers"
@@ -1239,12 +1544,12 @@ update_self() {
   [ -n "$need" ] || need=$(($(docker image inspect -f '{{.Size}}' "$(image_of "$ME")" 2>/dev/null || echo 0) / 1048576))
   if ! room_for $((need + ROOM_APP)); then
     log "the updater: not enough room (needs $need MB and $ROOM_APP to spare, $(free_mb) MB free), it stays as it is"
-    status updater nospace "$need" "$(free_mb)"
+    outcome updater nospace "$need" "$(free_mb)"
     return
   fi
   # the image it runs now, kept first under a tag of its own: the helper runs on it, and it's the way back
   prev=$(repo_of "$me"):previous
-  docker tag "$(image_of "$ME")" "$prev" 2>/dev/null || { log "the updater's own image can't be kept, it doesn't update itself"; status updater error keep; return; }
+  docker tag "$(image_of "$ME")" "$prev" 2>/dev/null || { log "the updater's own image can't be kept, it doesn't update itself"; outcome updater error keep; return; }
   if [ -n "$1" ]; then
     # (on its bar like a part, the run before keeps what it said: waiting for the dock)
     was=$(get result)
@@ -1258,32 +1563,51 @@ update_self() {
     status run_parts
     status result "${was:-done}"
   else
-    timeout $T_PULL docker pull -q "$me" > /dev/null 2>&1
+    # (quiet, a word now and then that it's there)
+    timeout $T_PULL docker pull -q "$me" > /dev/null 2>&1 &
+    n=$!
+    while kill -0 "$n" 2> /dev/null; do
+      alive
+      sleep 10
+    done
+    wait "$n"
     rc=$?
   fi
   if [ $rc -ne 0 ]; then
-    [ -n "$1" ] && log "the updater: its new version can't be downloaded, it stays as it is" && status updater error pull
+    [ -n "$1" ] && log "the updater: its new version can't be downloaded, it stays as it is" && outcome updater error pull
     return
   fi
   new=$(id_of "$me")
   if [ "$new" = "$(id_of "$prev")" ]; then
-    [ -n "$1" ] && log "the updater is up to date" && status updater current
+    [ -n "$1" ] && log "the updater is up to date" && outcome updater current
     check_self
     return
   fi
-  if [ "$new" = "$(get updater_failed)" ]; then
+  if failed_has updater "$new"; then
     docker tag "$prev" "$me"
-    [ -n "$1" ] && log "the updater: not again, this version didn't start before" && status updater skipped_failed
+    [ -n "$1" ] && log "the updater: not again, this version didn't start before" && outcome updater skipped_failed
     return
   fi
   # (all stacks: dockge may give each one a global.env next to them)
   root=$(dirname "$(label "$ME" project.working_dir)")
   log "updating the updater"
   # (what came of it, the next start says: a new version, or this one back)
-  status updater restarting "$(now)"
-  docker run -d --rm --name mowbite-updater-self -v /var/run/docker.sock:/var/run/docker.sock -v "$root:$root" -v /etc/localtime:/etc/localtime:ro \
-    -e "STATE_DIR=$STATE" -e "UPDATER_CONTAINER=$ME" --entrypoint sh "$prev" /self.sh "$me" "$prev" > /dev/null 2>&1 ||
-    { log "the updater's helper didn't start, it stays as it is"; docker tag "$prev" "$me"; status updater error helper; }
+  outcome updater restarting "$(now)"
+  if ! docker run -d --rm --name "$SELF" -v /var/run/docker.sock:/var/run/docker.sock -v "$root:$root" -v /etc/localtime:/etc/localtime:ro \
+    -e "STATE_DIR=$STATE" -e "UPDATER_CONTAINER=$ME" --entrypoint sh "$prev" /self.sh "$me" "$prev" > /dev/null 2>&1; then
+    log "the updater's helper didn't start, it stays as it is"
+    docker tag "$prev" "$me"
+    outcome updater error helper
+    return
+  fi
+  # (the helper replaces this container within a few minutes: nothing more is taken on here, a request waits for the new
+  # one. a helper that ends without replacing it leaves it running on)
+  n=0
+  while [ $n -lt 60 ] && docker container inspect "$SELF" > /dev/null 2>&1; do
+    alive
+    sleep 5
+    n=$((n + 1))
+  done
 }
 
 # (a request from its page or MowBite is waiting)
@@ -1291,19 +1615,28 @@ asked() { [ -s "$REQ" ]; }
 # the look whether there's something new, for its page while it lasts (looking). a request that comes in meanwhile
 # goes first: the look stops before its next step and is done again after it (half)
 check_all() {
+  local p
   half=1
   asked && return 0
   status looking "$(now)"
+  # (the mower's time zone: the night's time is the mower's)
+  status clock "$(date +%z)"
+  alive
   find_parts
   for p in $(part_ids); do
     asked && break
+    # (each step may wait a minute for its registry: MowBite takes it for gone after 5 minutes without a word)
+    alive
     check_part "$p"
   done
+  alive
   asked || check_self
   if ! asked; then
+    alive
     check_room
     status disk_free "$(free_mb)"
     status checked "$(now)"
+    looked=$(now)
     half=
   fi
   status looking
@@ -1312,7 +1645,7 @@ check_all() {
 # the parts asked for (all: every one), OpenMower first (builds start from it), the rest in their order. the ones that
 # wait for the dock only with the mower idle there, asked before each again. 2 when one had to wait for that
 run() {
-  local why="$1" parts="" p waited was
+  local why="$1" parts="" p waited was did=
   shift
   find_parts
   for p in $(part_ids); do
@@ -1323,23 +1656,31 @@ run() {
   status result running
   # (from here its page shows the run)
   status taken
+  rebuilt=
   # (one restarted before and not seen running yet comes first)
-  docked && settle
+  if docked; then
+    [ -n "$(for p in $(part_ids); do get "pending_$p"; done)" ] && did=1
+    settle
+  fi
   MANUAL=
   [ "$why" = request ] && MANUAL=1
   waited=
   for p in $parts; do
+    # (built on OpenMower's new version in this run already)
+    case " $rebuilt " in *" $p "*) continue ;; esac
     # (asked for: a part left as it was says why on its card)
     if [ "$(gate "$p")" = mower ] && ! docked; then
       waited=1
-      [ -n "$MANUAL" ] && status "$p" error not_docked
+      [ -n "$MANUAL" ] && outcome "$p" error not_docked
       continue
     fi
-    was=$(get "$p")
+    # (nothing said on its card meanwhile: its time as before)
+    was=$(get "${p}_at")
+    did=1
     update_part "$p"
     if [ $? -eq 2 ]; then
       waited=1
-      [ -n "$MANUAL" ] && [ "$(get "$p")" = "$was" ] && status "$p" error not_docked
+      [ -n "$MANUAL" ] && [ "$(get "${p}_at")" = "$was" ] && outcome "$p" error not_docked
     fi
   done
   status progress
@@ -1351,13 +1692,17 @@ run() {
   else
     status result "done"
   fi
-  tidy
-  check_all
+  # (nothing done, all of it waited for the dock: nothing to clear away, and the look of every 6 hours does)
+  if [ -n "$did" ]; then
+    tidy
+    check_all
+  fi
   [ -z "$waited" ] || return 2
 }
 
 # the parts set to update by themselves
 auto_parts() {
+  local p
   for p in $(part_ids); do auto "$p" && printf '%s ' "$p"; done
 }
 # the days it may run: daily or the weekdays 1-7 (monday 1), the day its window started ($1, unix time)
@@ -1389,8 +1734,15 @@ if [ -z "$STATE_DIR" ] && [ -z "$(label "$ME" project.working_dir)" ]; then
 fi
 mkdir -p "$STATE"
 chmod 700 "$STATE"
+# what a stop halfway left of files being written (status, log, settings, the list of what can go): nothing may grow.
+# (a minute old: the helper of its own update may write right now)
+find "$STATE" -maxdepth 1 \( -name 'status.??????' -o -name 'log.??????' -o -name 'conf.??????' -o -name 'room.??????' \) -mmin +1 -exec rm -f {} + 2> /dev/null
 # (for its interface, so it needs no docker to find its folder)
 printf '%s\n' "$STATE" > /tmp/updater-state
+# the broker's user and password for mosquitto_sub, see mqtt. (it takes the rest of the line, spaces too. an empty
+# password: on its command line)
+rm -f "$MQTT_OPTS"
+[ -n "$MQTT_USER" ] && [ -n "$MQTT_PASSWORD" ] && mkdir -p "${MQTT_OPTS%/*}" && (umask 077 && printf -- '-u %s\n-P %s\n' "$MQTT_USER" "$MQTT_PASSWORD" > "$MQTT_OPTS")
 serve
 log "started"
 # a new version of itself since it last started (its own update, or one by hand in dockge), or the one before back
@@ -1398,13 +1750,13 @@ log "started"
 # shellcheck disable=SC2046
 set -- $(get started)
 case $(get updater) in restarting*) asked_self=1 ;; *) asked_self= ;; esac
-if [ -n "$2" ] && [ "$2" != "$(image_of "$ME")" ] && [ "$2" != "$(get updater_failed)" ]; then
+if [ -n "$2" ] && [ "$2" != "$(image_of "$ME")" ] && ! failed_has updater "$2"; then
   log "the updater runs its new version"
-  status updater updated "$(now)" "$(rev_of "$(image_of "$ME")")"
+  outcome updater updated "$(now)" "$(rev_of "$(image_of "$ME")")"
   # (its card right away, not only after its first look)
   status updater_available no "$(ref_of "$ME")"
 elif [ -n "$asked_self" ] || { [ -n "$2" ] && [ "$2" != "$(image_of "$ME")" ]; }; then
-  status updater rolled_back "$(now)"
+  outcome updater rolled_back "$(now)"
 fi
 status started "$(now)" "$(image_of "$ME")"
 # (its page can be embedded, in MowBite's settings)
@@ -1416,7 +1768,8 @@ alive
 find_parts
 recover
 check_all
-done_day=""
+# (the night it ran last, also through a restart in its window: its own update right after it)
+done_day=$(get night_done)
 next=0
 while :; do
   serve
@@ -1449,21 +1802,25 @@ while :; do
         ;;
       self) self=1 ;;
       back)
-        if [ "$(kind "$a")" != image ]; then
-          :
-        elif [ "$(gate "$a")" = none ] || docked; then
-          status run_parts "$a"
-          status result running
-          status taken
-          back_image "$a"
-          status progress
-          status run_parts
-          status result "done"
-          check_all
-        else
-          log "$a: not back to the version before, the mower isn't idle in the dock"
-          status "$a" error not_docked
-        fi
+        case $(kind "$a") in
+        image | openmower)
+          if [ "$(gate "$a")" = none ] || docked; then
+            status run_parts "$a"
+            status result running
+            status taken
+            if [ "$a" = openmower ]; then back_openmower; else back_image "$a"; fi
+            status progress
+            status run_parts
+            status result "done"
+            # (the leftovers as after a run: a build made anew on it keeps the one before until then)
+            tidy
+            check_all
+          else
+            log "$a: not back to the version before, the mower isn't idle in the dock"
+            outcome "$a" error not_docked
+          fi
+          ;;
+        esac
         ;;
       room) check_room ;;
       free) room_free "$a" "$b" ;;
@@ -1487,6 +1844,9 @@ while :; do
   parts=$(auto_parts)
   since=$((($(minute) - $(at_minute) + 1440) % 1440))
   start=$(($(now) - since * 60))
+  # (the last look as its status says, or as it knows itself when the status can't be written: a full disk)
+  last=$(get checked | grep -x '[0-9]*')
+  [ "${looked:-0}" -gt "${last:-0}" ] && last=$looked
   if [ -n "$parts" ] && [ $since -lt $WINDOW ] && [ "$done_day" != "$(date -d "@$start" +%F)" ] && day_ok "$start" && [ "$(now)" -ge "$next" ]; then
     # shellcheck disable=SC2086
     run night $parts
@@ -1494,9 +1854,14 @@ while :; do
       next=$(($(now) + 600))
     else
       done_day=$(date -d "@$start" +%F)
+      status night_done "$done_day"
+    fi
+    # itself once a night, also when the mower wasn't in the dock: its own update doesn't touch the mower
+    if [ "$(get self_night)" != "$(date -d "@$start" +%F)" ]; then
+      status self_night "$(date -d "@$start" +%F)"
       update_self
     fi
-  elif [ -n "$half" ] || [ $(($(now) - $(get checked | grep -x '[0-9]*' || echo 0))) -ge $CHECK_EVERY ]; then
+  elif [ -n "$half" ] || [ $(($(now) - ${last:-0})) -ge $CHECK_EVERY ]; then
     check_all
   fi
   # (and one that came in during those)
