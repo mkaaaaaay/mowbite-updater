@@ -775,9 +775,11 @@ details[open] > summary::after {
   -webkit-user-select: text;
 }
 
-/* for screen readers only */
+/* for screen readers only (at the top: below the page it would make it taller than the height it tells MowBite) */
 .sr {
   position: absolute;
+  top: 0;
+  margin: 0;
   width: 1px;
   height: 1px;
   overflow: hidden;
@@ -792,6 +794,11 @@ html.embed body {
   min-height: 0;
   background: transparent !important;
   background-image: none !important;
+}
+
+/* its frame has its height: never a box that scrolls by itself, a swipe on it scrolls MowBite's page */
+html.embed {
+  overflow: hidden;
 }
 
 .embed header,
