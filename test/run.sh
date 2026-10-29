@@ -1,13 +1,13 @@
 #!/bin/sh
 # the updater against a mower of its own on this docker: a registry, a broker with a made-up mower state, OpenMower with
 # its .env, MowBite, the planner built on OpenMower, small apps in stacks. it starts from the updater that's out
-# (ghcr.io, the run fails without it; MBT_FROM=checkout: from a build of this checkout) and updates that to this checkout the way
-# each mower does, then each case through its interface, the way its page and MowBite use it, and a look at what runs
-# and at the files it changed. only what's labelled mbt.run=<id> or named <id>-* is made here (MBT_ID, default mbt) and
-# cleared away afterwards, also when it's stopped; a second run at the same time needs another MBT_ID and other
-# MBT_*_PORTs. its folder in TMPDIR (or MBT_WORK, kept then), on a disk with 1.5 GB free. needs docker with compose and
-# buildx, curl, python3 and the internet (ghcr.io, github for the builds and the stable channel). about 45 minutes,
-# most of it waiting for versions that don't start
+# (ghcr.io, the run fails without it; MBT_FROM=checkout: from a build of this checkout) and updates that to this
+# checkout (MBT_IMAGE: to that image, the ci's) the way each mower does, then each case through its interface, the way
+# its page and MowBite use it, and a look at what runs and at the files it changed. only what's labelled mbt.run=<id> or
+# named <id>-* is made here (MBT_ID, default mbt) and cleared away afterwards, also when it's stopped; a second run at
+# the same time needs another MBT_ID and other MBT_*_PORTs. its folder in TMPDIR (or MBT_WORK, kept then), on a disk
+# with 1.5 GB free. needs docker with compose and buildx, curl, python3 and the internet (ghcr.io, github for the builds
+# and the stable channel). about 45 minutes, most of it waiting for versions that don't start
 set -u
 cd "$(dirname "$0")/.." || exit 1
 SRC=$PWD
@@ -183,15 +183,16 @@ move() { docker buildx imagetools create -t "$REG/$P-$1:$2" "$REG/$P-$1:$3" > /d
 publish() { move app latest "$1"; }
 # the updater built from this checkout (<tag> <revision>), or on top of that build (<tag> <revision> broken|label)
 updater_img() {
-  if [ -z "${3:-}" ]; then
+  # (the new version b is the image in MBT_IMAGE when it's set, the one the ci ships, with the test's labels on it)
+  if [ -z "${3:-}" ] && { [ -z "${MBT_IMAGE:-}" ] || [ "$1" != b ]; }; then
     docker build -q --label "mbt.run=$P" --label "org.opencontainers.image.revision=$2" -t "$REG/$P-updater:$1" . > /dev/null
   else
     dir=$WORK/img/updater-$1
     mkdir -p "$dir"
     {
-      echo "FROM $REG/$P-updater:b"
+      if [ -z "${3:-}" ]; then echo "FROM $MBT_IMAGE"; else echo "FROM $REG/$P-updater:b"; fi
       echo "LABEL mbt.run=$P org.opencontainers.image.revision=$2"
-      [ "$3" = broken ] && echo 'ENTRYPOINT ["sh", "-c", "exit 1"]'
+      [ "${3:-}" = broken ] && echo 'ENTRYPOINT ["sh", "-c", "exit 1"]'
     } > "$dir/Dockerfile"
     docker build -q -t "$REG/$P-updater:$1" "$dir" > /dev/null
   fi && docker push -q "$REG/$P-updater:$1" > /dev/null

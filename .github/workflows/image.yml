@@ -18,14 +18,14 @@ permissions:
   contents: read
 
 jobs:
-  # only once the checks and the tests went through: the updaters on the mowers take it from here
-  image:
-    needs: [check, test, commits]
+  # built once for amd64 and arm64 and pushed as sha-<commit> only, nothing updates to that
+  build:
     runs-on: ubuntu-latest
-    # (only this job writes to the registry)
     permissions:
       contents: read
       packages: write
+    outputs:
+      image: ghcr.io/${{ github.repository }}@${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -41,18 +41,50 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=sha,format=short
+          tags: type=sha,format=short
 
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  # only once the checks and the tests of that very image went through, under its names and not built again: the
+  # updaters on the mowers take it from here
+  image:
+    needs: [build, check, test, commits]
+    runs-on: ubuntu-latest
+    # (only this job and build write to the registry)
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+
+      - env:
+          IMAGE: ${{ needs.build.outputs.image }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          args=()
+          while read -r tag; do [ -z "$tag" ] || args+=(-t "$tag"); done <<< "$TAGS"
+          [ ${#args[@]} = 0 ] || docker buildx imagetools create "${args[@]}" "$IMAGE"
 
   commits:
     uses: ./.github/workflows/commits.yml
@@ -66,16 +98,30 @@ jobs:
       # (the same as check.yml on every push)
       - run: sh test/static.sh
 
-  # the updater against a made-up mower on the runner's docker: its interface, update and back, a version that doesn't
+  # the image from build against a made-up mower on the runner's docker, on a pc and on an arm machine like the mowers: its interface, update and back, a version that doesn't
   # start, the mower out, stopped halfway, picked apps, stable, OpenMower with its .env and the planner built on it, the
   # night, a registry without an answer, making room, builds, itself and a broken version of itself. about 45 minutes,
   # most of it waiting for versions that don't start
   test:
-    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 75
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver: docker
-      - run: sh test/run.sh
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - env:
+          MBT_IMAGE: ${{ needs.build.outputs.image }}
+        run: sh test/run.sh
