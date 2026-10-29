@@ -61,7 +61,7 @@ mqtt() {
   local t="$1"
   set -- -h "${MQTT_HOST:-127.0.0.1}" -p "${MQTT_PORT:-1883}"
   [ -n "$MQTT_USER" ] && [ ! -s "$MQTT_OPTS" ] && set -- "$@" -u "$MQTT_USER" -P "$MQTT_PASSWORD"
-  timeout 10 mosquitto_sub "$@" -t "${MQTT_PREFIX}$t" -R -C 1 -W 6 2> /dev/null
+  timeout 10 mosquitto_sub "$@" -t "$t" -R -C 1 -W 6 2> /dev/null
 }
 mower() {
   local s rc state charging
@@ -84,44 +84,133 @@ mower() {
 docked() { [ "$(mower)" = 1 ]; }
 # OpenMower doesn't drive the mower: idle, in the dock or not, or no answer from it at all. no broker: no telling, so not
 quiet() { case $(mower) in 1 | "0 IDLE" | "0 unknown") return 0 ;; *) return 1 ;; esac; }
-# what the broker keeps on a topic of MowBite's (retained): its last message, nothing when there's none
-retained() {
-  set -- -h "${MQTT_HOST:-127.0.0.1}" -p "${MQTT_PORT:-1883}" -t "${MQTT_PREFIX}$1" -C 1 -W 3
-  [ -n "$MQTT_USER" ] && [ ! -s "$MQTT_OPTS" ] && set -- "$@" -u "$MQTT_USER" -P "$MQTT_PASSWORD"
-  timeout 10 mosquitto_sub "$@" 2> /dev/null
+# a value of OpenMower's parameters as rosparam gives them, one "key: value" a line, without the quotes round it
+pval() {
+  local v
+  v=$(printf '%s\n' "$1" | sed -n "s/^$2: *//p" | head -n1)
+  case $v in
+  \'*\')
+    v=${v#\'}
+    v=$(printf '%s' "${v%\'}" | sed "s/''/'/g")
+    ;;
+  \"*\")
+    v=${v#\"}
+    v=${v%\"}
+    ;;
+  esac
+  printf '%s' "$v"
 }
-retain() {
-  local t="$1"
-  shift
-  set -- -h "${MQTT_HOST:-127.0.0.1}" -p "${MQTT_PORT:-1883}" -t "${MQTT_PREFIX}$t" -r "$@"
-  [ -n "$MQTT_USER" ] && [ ! -s "$MQTT_PUB_OPTS" ] && set -- "$@" -u "$MQTT_USER" -P "$MQTT_PASSWORD"
-  timeout 10 mosquitto_pub "$@" 2> /dev/null
+own_broker() { echo "${MQTT_HOST:-127.0.0.1}|${MQTT_PORT:-1883}||own|"; }
+# the places MowBite works at, OpenMower's brokers: the one on the mower (no prefix, xbot_monitoring has it fixed) and
+# the external one while OpenMower sends there too, as OpenMower runs with it (xbot_monitoring/external_mqtt_*, from
+# mower_params.yaml or OM_MQTT_* in a legacy config): the prefix with a / after it and a port given as text taken as
+# 1883, like xbot_monitoring does. "host|port|prefix|login|user" a line, login the folder of the external one's mosquitto
+# options files with its password, user one without a password. parameters that don't come: the one on the mower alone,
+# 1 while OpenMower answers (whether it sends to an external one isn't known), 2 while it doesn't (none of its brokers
+# takes a start to the mower then but the one on it)
+om_brokers() {
+  local p host port prefix user pass login
+  own_broker
+  if ! p=$(timeout 20 docker exec "$OM" bash -lc '. /opt/open_mower_ros/devel/setup.bash && rosparam get /xbot_monitoring' 2> /dev/null); then
+    case $(mower) in "" | "0 unknown") return 2 ;; *) return 1 ;; esac
+  fi
+  case $(pval "$p" external_mqtt_enable) in true | True | 1) ;; *) return 0 ;; esac
+  host=$(pval "$p" external_mqtt_hostname)
+  [ -n "$host" ] || return 0
+  port=$(printf '%s\n' "$p" | sed -n 's/^external_mqtt_port: *//p' | head -n1)
+  case $port in "" | *[!0-9]*) port=1883 ;; esac
+  prefix=$(pval "$p" external_mqtt_topic_prefix)
+  case $prefix in "" | */) ;; *) prefix=$prefix/ ;; esac
+  user=$(pval "$p" external_mqtt_username)
+  pass=$(pval "$p" external_mqtt_password)
+  login=${MQTT_OPTS%/*}/external
+  (umask 077 && mkdir -p "$login" && rm -f "$login/mosquitto_sub" "$login/mosquitto_pub") || return 0
+  if [ -n "$user" ] && [ -n "$pass" ]; then
+    (umask 077 && printf -- '-u %s\n-P %s\n' "$user" "$pass" > "$login/mosquitto_sub" && cp "$login/mosquitto_sub" "$login/mosquitto_pub")
+    user=
+  fi
+  echo "$host|$port|$prefix|$login|$user"
+}
+# mosquitto_sub or mosquitto_pub ($1) on a broker of om_brokers() ($2) with a topic of MowBite's ($3, after its prefix)
+# and the rest of the options
+on_broker() {
+  local tool="$1" t="$3" host port prefix login user
+  IFS='|' read -r host port prefix login user << EOF
+$2
+EOF
+  shift 3
+  set -- -h "$host" -p "$port" -t "$prefix$t" "$@"
+  if [ "$login" = own ]; then
+    [ -n "$MQTT_USER" ] && [ ! -s "${MQTT_OPTS%/*}/$tool" ] && set -- "$@" -u "$MQTT_USER" -P "$MQTT_PASSWORD"
+    timeout 10 "$tool" "$@" 2> /dev/null
+  else
+    [ -n "$user" ] && set -- "$@" -u "$user"
+    XDG_CONFIG_HOME=$login timeout 10 "$tool" "$@" 2> /dev/null
+  fi
 }
 # MowBite's schedule starts nothing while it holds it: {"until":<unix s>}, set before OpenMower or a build restarts
 # (what the schedule started then would stand in the garden), gone once that's done. one left by an updater stopped
 # halfway runs out by itself: HOLD_FOR covers a restart, its look and the way back. a start sent just before shows in
-# the mower's state after HOLD_WAIT
+# the mower's state after HOLD_WAIT. on each of OpenMower's brokers, MowBite is on one of them
 HOLD_FOR=1500
 HOLD_WAIT=${UPDATER_HOLD_WAIT:-10}
 held=
+held_m=
 hold() {
-  retain mowbite/hold -m "{\"until\":$(($(now) + HOLD_FOR))}" || { log "$1: MowBite's schedule can't be held (mqtt), not restarted"; return 1; }
-  held=1
+  local b list
+  list=$(om_brokers)
+  case $? in
+  1)
+    log "$1: OpenMower runs but its parameters didn't come (whether it sends to an external broker too), not restarted"
+    return 1
+    ;;
+  2) log "$1: OpenMower doesn't answer, MowBite's schedule held on its broker on the mower only" ;;
+  esac
+  held_m="{\"until\":$(($(now) + HOLD_FOR))}"
+  for b in $list; do
+    if ! on_broker mosquitto_pub "$b" mowbite/hold -r -m "$held_m"; then
+      log "$1: MowBite's schedule can't be held (mqtt ${b%%|*}), not restarted"
+      unhold
+      return 1
+    fi
+    held="$held $b"
+  done
   sleep "$HOLD_WAIT"
 }
-unhold() {
+# a broker in OpenMower's container (its legacy image, without persistence) forgets the hold when it restarts: set
+# again as soon as it takes it, before anything looks at the mower
+rehold() {
+  local b end
   [ -n "$held" ] || return 0
+  end=$(($(up) + 60))
+  for b in $held; do
+    until on_broker mosquitto_pub "$b" mowbite/hold -r -m "$held_m"; do
+      [ "$(up)" -lt "$end" ] || { log "MowBite's schedule couldn't be held again (mqtt ${b%%|*})"; break; }
+      sleep 1
+    done
+  done
+}
+unhold() {
+  local b were="$held"
+  [ -n "$were" ] || return 0
   held=
-  retain mowbite/hold -n || log "MowBite's schedule still held, it runs out by itself"
+  for b in $were; do
+    on_broker mosquitto_pub "$b" mowbite/hold -r -n || log "MowBite's schedule still held (mqtt ${b%%|*}), it runs out by itself"
+  done
 }
 # when MowBite's schedule may start the mower within 30 minutes or right now (it says from when to when, retained
-# {"from":<unix s>,"to":<unix s>}): from when. nothing said, nothing soon
+# {"from":<unix s>,"to":<unix s>}, on the broker it's on): the earliest from when. nothing said, nothing soon
 soon() {
-  local n from to
-  n=$(retained mowbite/schedule/next)
-  from=$(printf '%s' "$n" | sed -n 's/.*"from": *\([0-9]*\).*/\1/p')
-  to=$(printf '%s' "$n" | sed -n 's/.*"to": *\([0-9]*\).*/\1/p')
-  [ -n "$from" ] && [ -n "$to" ] && [ $(($(now) + 1800)) -ge "$from" ] && [ "$(now)" -le "$to" ] && echo "$from"
+  local b n from to at=
+  for b in $(om_brokers); do
+    n=$(on_broker mosquitto_sub "$b" mowbite/schedule/next -C 1 -W 3)
+    from=$(printf '%s' "$n" | sed -n 's/.*"from": *\([0-9]*\).*/\1/p')
+    to=$(printf '%s' "$n" | sed -n 's/.*"to": *\([0-9]*\).*/\1/p')
+    if [ -n "$from" ] && [ -n "$to" ] && [ $(($(now) + 1800)) -ge "$from" ] && [ "$(now)" -le "$to" ]; then
+      [ -z "$at" ] || [ "$from" -lt "$at" ] && at=$from
+    fi
+  done
+  [ -n "$at" ] && echo "$at"
 }
 # OpenMowerOS 3: open_mower_ros is part of the os there, updated with it (openmower update-os)
 new_os() { grep -qx 'ID=openmower-os' /host/os-release 2> /dev/null; }
@@ -614,6 +703,7 @@ restart() {
   # (one that runs an image that isn't there any more is made anew: compose takes it for the same and leaves it)
   docker image inspect "$(image_of "$(box "$1")")" > /dev/null 2>&1 || force=1
   compose $T_UP "$(box "$1")" up -d --no-deps --no-build --pull never ${force:+--force-recreate} "$(service "$(box "$1")")" >> "$LOG" 2>&1 || { log "$1: compose couldn't start it"; return 1; }
+  rehold
   seen "$1" "$2"
 }
 seen() {
@@ -1904,6 +1994,8 @@ rm -f "$MQTT_OPTS" "$MQTT_PUB_OPTS"
   (umask 077 && printf -- '-u %s\n-P %s\n' "$MQTT_USER" "$MQTT_PASSWORD" > "$MQTT_OPTS" && cp "$MQTT_OPTS" "$MQTT_PUB_OPTS")
 serve
 log "started"
+# (its own prefix is gone: OpenMower's broker on the mower has none, an external one's comes from OpenMower)
+[ -z "${MQTT_PREFIX:-}" ] || log "MQTT_PREFIX is left out: OpenMower's broker on the mower has no prefix, an external one's comes from OpenMower"
 # a new version of itself since it last started (its own update, or one by hand in dockge), or the one before back
 # when the new one didn't come up: said on its card
 # shellcheck disable=SC2046

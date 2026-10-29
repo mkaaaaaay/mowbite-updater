@@ -144,7 +144,8 @@ cleanup() {
 
 # a test image <repo>:<tag> in the registry: run (says ready and stays, with /start for a planner built on it), crash
 # (ends at once), nostart (can't be started), bare (stays, nothing for a planner), mowbite (says its version $4).
-# OpenMower's with a rostopic that gives its emergency's reason from the file state/reason-<tag>
+# OpenMower's with a rostopic that gives its emergency's reason from the file state/reason-<tag> and a rosparam that gives
+# xbot_monitoring's parameters from state/xbot.yaml (none with state/xbot-fail)
 img() {
   dir=$WORK/img/$1-$2
   mkdir -p "$dir"
@@ -152,6 +153,7 @@ img() {
     printf '#!/bin/sh\nexec sh "$@"\n' > "$dir/bash"
     : > "$dir/setup.bash"
     printf '#!/bin/sh\nprintf '"'"'"%%s"\\n---\\n'"'"' "$(cat /state/reason-%s 2> /dev/null)"\n' "$2" > "$dir/rostopic"
+    printf '#!/bin/sh\n[ -e /state/xbot-fail ] && exit 1\ncat /state/xbot.yaml 2> /dev/null\nexit 0\n' > "$dir/rosparam"
   fi
   {
     echo 'FROM busybox:1.37-musl'
@@ -170,7 +172,7 @@ EOF
       printf 'COPY --chmod=755 version /www/cgi-bin/version\nCMD ["httpd", "-f", "-p", "8080", "-h", "/www"]\n'
       ;;
     esac
-    [ "$1" = om ] && printf 'COPY --chmod=755 bash rostopic /bin/\nCOPY setup.bash /opt/open_mower_ros/devel/\n'
+    [ "$1" = om ] && printf 'COPY --chmod=755 bash rostopic rosparam /bin/\nCOPY setup.bash /opt/open_mower_ros/devel/\n'
   } > "$dir/Dockerfile"
   docker build -q -t "$REG/$P-$1:$2" "$dir" > /dev/null && docker push -q "$REG/$P-$1:$2" > /dev/null
 }
@@ -715,27 +717,51 @@ grep -qx 'OM_PLANNER=external' "$OMENV" && grep -qx '# made-up OpenMower' "$OMEN
 [ "$(val "len(s.get('openmower_failed', '').split())")" = 2 ] && ok "that version left out" || bad "left out: $(val "s.get('openmower_failed')")"
 
 say "OpenMower, MowBite's schedule starts the mower soon"
+# from here OpenMower sends to an external broker too, its prefix without the / (the test's broker under ext/)
+cat > "$WORK/state/xbot.yaml" << EOF
+external_mqtt_enable: true
+external_mqtt_hostname: 127.0.0.1
+external_mqtt_password: 'it''s secret'
+external_mqtt_port: $MQTT
+external_mqtt_topic_prefix: ext
+external_mqtt_username: ext
+software_version: ''
+EOF
 post conf 'openmower edge' > /dev/null
 soon=$(($(date +%s) + 600))
-keep mowbite/schedule/next -m "{\"from\":$soon,\"to\":$soon}"
+# (MowBite on the external one: it says it there)
+keep ext/mowbite/schedule/next -m "{\"from\":$soon,\"to\":$soon}"
 post now=openmower > /dev/null
 until_true "s.get('openmower', '') == 'error schedule $soon' and s.get('result') != 'running'" 120 && runs_on "$P-om" "$REG/$P-om:o1" &&
   [ "$(envv)" = '"v1"' ] && ok "left as it is, its card says when the schedule starts it" ||
   bad "openmower: $(val "s.get('openmower')"), runs $(docker inspect -f '{{.Image}}' "$P-om"), its .env $(envv)"
-keep mowbite/schedule/next -n
+keep ext/mowbite/schedule/next -n
+
+say "OpenMower, it runs but its parameters don't come"
+touch "$WORK/state/xbot-fail"
+post now=openmower > /dev/null
+until_true "s.get('openmower', '') == 'error hold' and s.get('result') != 'running'" 120 && runs_on "$P-om" "$REG/$P-om:o1" &&
+  [ -z "$(kept mowbite/hold)" ] && ok "left as it is: whether it sends to an external broker too isn't known, nothing held" ||
+  bad "openmower: $(val "s.get('openmower')"), runs $(docker inspect -f '{{.Image}}' "$P-om"), held: $(kept mowbite/hold)"
+rm -f "$WORK/state/xbot-fail"
 
 say "OpenMower, another channel"
 post conf 'openmower edge' > /dev/null
 # (what the updater says on mowbite/hold meanwhile)
-docker exec -d "$P-broker" sh -c 'mosquitto_sub -h 127.0.0.1 -t mowbite/hold > /tmp/hold.log'
+docker exec -d "$P-broker" sh -c 'mosquitto_sub -h 127.0.0.1 -v -t mowbite/hold -t ext/mowbite/hold > /tmp/hold.log'
 t0=$(date +%s)
 post now=openmower > /dev/null
 until_true "s.get('openmower', '').startswith('updated') and s.get('result') != 'running'" 240 && runs_on "$P-om" "$REG/$P-om:o2" &&
   ok "on edge" || bad "edge: $(val "s.get('openmower')"), runs $(docker inspect -f '{{.Image}}' "$P-om")"
-u=$(docker exec "$P-broker" sed -n 's/^{"until":\([0-9]*\)}$/\1/p' /tmp/hold.log | head -n1)
-[ -n "$u" ] && [ "$u" -ge $((t0 + 1500)) ] && [ "$u" -le $(($(date +%s) + 1500)) ] && ok "MowBite's schedule held for 25 minutes before the restart" ||
+u=$(docker exec "$P-broker" sed -n 's/^mowbite\/hold {"until":\([0-9]*\)}$/\1/p' /tmp/hold.log | head -n1)
+[ -n "$u" ] && [ "$u" -ge $((t0 + 1500)) ] && [ "$u" -le $(($(date +%s) + 1500)) ] &&
+  docker exec "$P-broker" grep -qx "ext/mowbite/hold {\"until\":$u}" /tmp/hold.log &&
+  ok "MowBite's schedule held for 25 minutes before the restart, on the mower's broker and under OpenMower's external prefix" ||
   bad "the hold: $(docker exec "$P-broker" cat /tmp/hold.log | tr '\n' '|')"
-[ -z "$(kept mowbite/hold)" ] && ok "and no more once it's done" || bad "still held: $(kept mowbite/hold)"
+[ "$(docker exec "$P-broker" grep -cx "mowbite/hold {\"until\":$u}" /tmp/hold.log)" -ge 2 ] &&
+  ok "and set again right after the restart (a broker in OpenMower's container forgets it)" || bad "not set again: $(docker exec "$P-broker" cat /tmp/hold.log | tr '\n' '|')"
+[ -z "$(kept mowbite/hold)$(kept ext/mowbite/hold)" ] && ok "and no more once it's done" ||
+  bad "still held: $(kept mowbite/hold) $(kept ext/mowbite/hold)"
 docker exec "$P-broker" pkill mosquitto_sub
 [ "$(envv)" = '"edge"' ] && [ "$(perm "$OMENV")" = "$mode" ] && ok "its .env says edge, its owner and rights kept" || bad "its .env: $(envv), $(perm "$OMENV")"
 docker image inspect "$REG/$P-om:v1" > /dev/null 2>&1 && bad "the tag v1 is still here" || ok "the tag it ran from is gone, nothing names it"

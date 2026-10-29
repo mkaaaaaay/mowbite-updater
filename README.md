@@ -123,8 +123,11 @@ All optional, in `compose.yaml` under `environment`:
 | | |
 | --- | --- |
 | `PORT` | its page, default `8083` |
-| `MQTT_HOST`, `MQTT_PORT` | the mower's MQTT broker, default `127.0.0.1:1883` |
-| `MQTT_USER`, `MQTT_PASSWORD`, `MQTT_PREFIX` | if your broker needs them |
+| `MQTT_HOST`, `MQTT_PORT` | OpenMower's broker on the mower, default `127.0.0.1:1883` like OpenMower itself |
+| `MQTT_USER`, `MQTT_PASSWORD` | if it needs a login |
+
+MowBite's schedule is held on that broker and, while OpenMower sends to an external one too (`external_mqtt_*` in
+`mower_params.yaml`), there with OpenMower's prefix.
 
 </details>
 
