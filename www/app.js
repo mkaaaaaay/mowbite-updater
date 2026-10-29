@@ -94,6 +94,7 @@ const DE = {
   'Edge (newest)': 'Edge (neueste)',
   'Update': 'Aktualisieren',
   'Switch': 'Wechseln',
+  'Try again': 'Erneut versuchen',
   'Replace with the official version': 'Durch offizielle Version ersetzen',
   'Automatically at night ({when})': 'Automatisch nachts ({when})',
   'Version and going back': 'Version und Rückweg',
@@ -152,6 +153,11 @@ const DE = {
   'stable {v} is older than what runs, it stays until a newer stable is out': 'Stabil {v} ist älter als die laufende Version, sie bleibt, bis es eine neuere stabile gibt',
   "The new version didn't start, it went back to the one before by itself. That version is left out, only the next one is tried again.":
     'Die neue Version ist nicht gestartet, er ist von selbst auf die vorige zurückgegangen. Diese Version lässt er aus, erst die nächste wird wieder versucht.',
+  "The new version keeps the motors off, it needs newer firmware: openmower update-firmware. It went back to the one before by itself. After the firmware update, tap Try again.":
+    'Die neue Version lässt die Motoren gesperrt, sie braucht neuere Firmware: openmower update-firmware. Er ist von selbst auf die vorige zurückgegangen. Nach dem Firmware-Update auf Erneut versuchen tippen.',
+  "This update goes to another version line of OpenMower ({from} → {to}). It can need newer firmware: if the motors stay off after it, the updater goes back by itself and says so.":
+    'Dieses Update wechselt die Versionslinie von OpenMower ({from} → {to}). Sie kann neuere Firmware brauchen: Bleiben die Motoren danach gesperrt, geht der Updater von selbst zurück und sagt es.',
+  'older': 'älter',
   "not confirmed yet: the new version didn't answer as it should while the mower wasn't ready, nothing was restarted. The next run looks again":
     'noch nicht bestätigt: Die neue Version hat nicht wie erwartet geantwortet, während der Mäher nicht bereit war, deshalb wurde nichts neu gestartet. Der nächste Lauf sieht noch einmal nach',
   'not updated: {name} is stopped right now': 'nicht aktualisiert: {name} ist gerade gestoppt',
@@ -573,6 +579,9 @@ function result(p) {
       return warn(tr('stable {v} is older than what runs, it stays until a newer stable is out', {v: rest[0] || '?'}));
     case 'rolled_back':
       // (the version before runs again)
+      if (rest[0] === 'firmware') {
+        return warn(tr("The new version keeps the motors off, it needs newer firmware: openmower update-firmware. It went back to the one before by itself. After the firmware update, tap Try again."));
+      }
       return warn(tr("The new version didn't start, it went back to the one before by itself. That version is left out, only the next one is tried again."));
     case 'unconfirmed':
       return warn(tr("not confirmed yet: the new version didn't answer as it should while the mower wasn't ready, nothing was restarted. The next run looks again"));
@@ -865,11 +874,20 @@ function actButton(p) {
   // (it can't update itself from outside its compose file)
   if (p.id === 'updater' && (S('updater_away') || S('updater_available') === 'unknown none')) return null;
   const a = avail(p.id);
-  const label = {yes: 'Update', switch: 'Switch', local: 'Replace with the official version', unknown: 'Update', '': 'Update'}[a];
+  // (OpenMower left out for the firmware: again after openmower update-firmware)
+  const again = p.kind === 'openmower' && S('openmower_fw') ? 'Try again' : undefined;
+  const label = {yes: 'Update', switch: 'Switch', local: 'Replace with the official version', unknown: 'Update', '': 'Update', failed: again}[a];
   if (!label) return null;
   return h('div', {class: 'act'},
     h('button', {class: 'control' + (a === 'yes' || a === 'switch' ? ' primary' : ''), 'data-key': 'now:' + p.id, disabled: busy(),
       onclick: () => ask(p.id === 'updater' ? 'self' : 'now=' + p.id)}, tr(label)));
+}
+// an update to another version line of OpenMower, before it's tapped
+function lineChange() {
+  const [from, to] = S('openmower_line').split(' ');
+  if (!to) return null;
+  return h('p', {class: 'warn'}, tr("This update goes to another version line of OpenMower ({from} → {to}). It can need newer firmware: if the motors stay off after it, the updater goes back by itself and says so.",
+    {from: from === '-' ? tr('older') : from, to}));
 }
 const failedHere = (where) => failed && failedFor === where && h('p', {class: 'warn'}, failed);
 
@@ -919,6 +937,7 @@ function partCard(p) {
     resultLine(p),
     p.kind === 'openmower' && st.conf.openmower !== 'edge' && PARTS().some((x) => x.id === 'planner') &&
       h('p', {class: 'warn'}, tr("With this version the MowBite Planner doesn't work: it needs two changes that are only in edge so far (OM_PLANNER=external and keeping the planner's settings per area).")),
+    p.kind === 'openmower' && ['yes', 'switch'].includes(avail(id)) && lineChange(),
     p.kind === 'image' && st.conf[id] === 'stable' && S(id + '_stable_older') && state !== 'stable_older' &&
       dim(tr('stable {v} is older than what runs, it stays until a newer stable is out', {v: S(id + '_stable_older')})),
     p.kind === 'image' && avail(id) === 'local' && dim(tr("This version was built on its own, it isn't the official one.")),

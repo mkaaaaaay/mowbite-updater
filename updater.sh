@@ -12,12 +12,13 @@
 #     gives it a stable channel, mowbite.update.name its name
 # it looks every 6 hours whether there's something new, updates a part when asked (its page, MowBite) and the automatic
 # ones at the time and on the days set. a part counts as updated when it runs on its new image and answers, otherwise
-# it goes back to what ran before and leaves that version out; restarted again only while OpenMower doesn't drive the
-# mower. only with room to spare. all through the stacks' own compose files, so dockge shows the same, files changed
-# keep owner and rights, only its own change is ever put back. stopped halfway (power gone), it puts back what it
-# changed and looks again at what it had restarted, at its next start. images built here aren't replaced or deleted by
-# itself. last the leftovers go: its older rollback tags, images nothing uses, the build cache. what it does right now
-# goes to the status as progress, for the bars on its page
+# it goes back to what ran before and leaves that version out (OpenMower also when the new version keeps the motors off
+# for the firmware); restarted again only while OpenMower doesn't drive the mower. only with room to spare. all through
+# the stacks' own compose files, so dockge shows the same, files changed keep owner and rights, only its own change is
+# ever put back. stopped halfway (power gone), it puts back what it changed and looks again at what it had restarted, at
+# its next start. images built here aren't replaced or deleted by itself. last the leftovers go: its older rollback
+# tags, images nothing uses, the build cache. what it does right now goes to the status as progress, for the bars on its
+# page
 . /lib.sh
 # rollback tags (rb-<time>-<image>) kept once all runs again: an app's are small, OpenMower's and builds' are GBs
 KEEP=2
@@ -82,6 +83,13 @@ docked() { [ "$(mower)" = 1 ]; }
 quiet() { case $(mower) in 1 | "0 IDLE" | "0 unknown") return 0 ;; *) return 1 ;; esac; }
 # OpenMowerOS 3: open_mower_ros is part of the os there, updated with it (openmower update-os)
 new_os() { grep -qx 'ID=openmower-os' /host/os-release 2> /dev/null; }
+# whether OpenMower keeps the motors off for a firmware that doesn't fit it (FIRMWARE_INCOMPATIBLE in its emergency's
+# reason, set by OpenMower itself: robot_state doesn't say it). 1 not, 2 no telling (an image without rostopic)
+fw_blocked() {
+  local r
+  r=$(timeout 20 docker exec "$OM" bash -lc '. /opt/open_mower_ros/devel/setup.bash && rostopic echo -n1 /ll/emergency/reason' 2> /dev/null) || return 2
+  case $r in *FIRMWARE_INCOMPATIBLE*) return 0 ;; *---*) return 1 ;; *) return 2 ;; esac
+}
 
 # --- containers and images ---
 
@@ -553,9 +561,11 @@ available() {
 # --- starting a part and seeing it run ---
 
 # a part started on what its tag says now, then seen running on the image $2 and answering (check_of), within two
-# minutes, a built one within five, OpenMower within six. 1 when compose can't start it or it doesn't answer. never
-# built or pulled here: the image is there already (pulled, built or the one before), a planner with pull_policy: build
-# would be built once more and run on an image nobody checked, one with pull_policy: always would get the new one back
+# minutes, a built one within five, OpenMower within six. OpenMower after its update (openmower_fw_check on) also with
+# the motors not kept off for the firmware, at least not for longer than a minute after it answers (fw_failed then). 1
+# when compose can't start it or it doesn't answer. never built or pulled here: the image is there already (pulled,
+# built or the one before), a planner with pull_policy: build would be built once more and run on an image nobody
+# checked, one with pull_policy: always would get the new one back
 restart() {
   local force=
   progress "$1" restart
@@ -565,7 +575,8 @@ restart() {
   seen "$1" "$2"
 }
 seen() {
-  local c end ok how started s
+  local c end ok how started s fw=
+  fw_failed=
   c=$(box "$1")
   how=$(check_of "$1")
   # (a healthcheck may take a while between its tries)
@@ -588,11 +599,19 @@ seen() {
         [ $ok -ge 3 ] && return 0
         ;;
       esac
-      [ "$how" = mqtt ] && [ $ok -ge 2 ] && return 0
+      if [ "$how" = mqtt ] && [ $ok -ge 2 ]; then
+        [ "$(get openmower_fw_check)" = on ] && fw_blocked || return 0
+        [ -n "$fw" ] || fw=$(up)
+        [ $(($(up) - fw)) -lt 60 ] || break
+      fi
     else
       ok=0
     fi
   done
+  if [ -n "$fw" ]; then
+    fw_failed=1
+    log "$1: the motors stay off, it needs newer firmware (openmower update-firmware)"
+  fi
   return 1
 }
 
@@ -607,6 +626,7 @@ harmless() {
   [ "$(gate "$1")" = none ]
 }
 go_back() {
+  local fw="$fw_failed"
   if ! harmless "$1" && ! quiet; then
     log "$1: didn't run as it should, but the mower isn't idle (or there's no broker): nothing restarted, looked at again next time"
     outcome "$1" unconfirmed
@@ -615,9 +635,14 @@ go_back() {
   log "$1: didn't run as it should, back to $2"
   progress "$1" back
   [ -n "$4" ] && status "$1_failed" "$4"
+  # (OpenMower: left out for the firmware, tried again when asked. the one before isn't checked for it, it ran so)
+  if [ "$1" = openmower ]; then
+    status openmower_fw_check
+    if [ -n "$fw" ]; then status openmower_fw "${4##* }"; else status openmower_fw; fi
+  fi
   docker tag "$2" "$3"
   undo_change "$1"
-  if restart "$1" "$(id_of "$2")"; then outcome "$1" rolled_back; else outcome "$1" error rollback; fi
+  if restart "$1" "$(id_of "$2")"; then outcome "$1" rolled_back ${fw:+"firmware"}; else outcome "$1" error rollback; fi
   status "pending_$1"
   return 0
 }
@@ -643,6 +668,8 @@ settle() {
       status "pending_$p"
       outcome "$p" updated "$(now)"
       if [ "$p" = openmower ]; then
+        status openmower_fw_check
+        status openmower_fw
         x=$(prev_of "$1" "$(repo_of "$2")")
         status openmower_prev ${x:+"$x"}
         rebuild_on_om "$(ref_of "$OM")"
@@ -921,6 +948,38 @@ om_saved_back() {
   set_om_version "$1" && keep_change openmower && log "openmower: VERSION in $(om_env) back to $1, as it was saved"
 }
 
+# when an image was made, to the second (utc, 2026-08-31T13:23:38: compared as text): one here, one in its registry
+made_here() { docker image inspect -f '{{.Created}}' "$1" 2>/dev/null | cut -c1-19; }
+made_there() { timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format '{{json .Image}}' 2>/dev/null | sed -n 's/.*"created": *"\([^"]*\)".*/\1/p' | head -n1 | cut -c1-19; }
+# OpenMower's last three version lines (major.minor) from its releases on github (their feed, no api limit; OM_RELEASES
+# another), each with when the image of its first release was made: "<line> <time>" a line, oldest first
+om_lines() {
+  local feed="${OM_RELEASES:-}" line v t
+  if [ -z "$feed" ]; then
+    case $1 in ghcr.io/*/*) feed=https://github.com/${1#ghcr.io/}/releases.atom ;; *) return 0 ;; esac
+  fi
+  wget -q -T 15 -O - "$feed" 2>/dev/null | sed -n 's|.*/releases/tag/v\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*|\1|p' |
+    sort -u -t. -k1,1n -k2,2n -k3,3n | awk -F. '!seen[$1 "." $2]++ {print $1 "." $2, $0}' | tail -n 3 | while read -r line v; do
+    t=$(made_there "$1:$v")
+    [ -n "$t" ] || t=$(made_there "$1:v$v")
+    [ -n "$t" ] && echo "$line $t"
+  done
+}
+# the line an image made at $2 belongs to: the newest one whose first release was made by then, nothing before them all
+line_of() { printf '%s\n' "$1" | awk -v t="$2" 'NF == 2 && $2 <= t {l = $1} END {print l}'; }
+# an update to another version line of OpenMower (1.3 to 1.4), for a word on its card before it: openmower_line
+# <the line that runs, - when older than the lines known> <the new one>
+check_om_line() {
+  local lines from to
+  status openmower_line
+  lines=$(om_lines "$(repo_of "$1")")
+  [ -n "$lines" ] || return 0
+  to=$(line_of "$lines" "$(made_there "$2")")
+  from=$(line_of "$lines" "$(made_here "$(image_of "$OM")")")
+  [ -n "$to" ] && [ "$from" != "$to" ] && status openmower_line "${from:--}" "$to"
+  return 0
+}
+
 check_openmower() {
   local cur x
   if [ "$(kind openmower)" = os ]; then
@@ -932,6 +991,9 @@ check_openmower() {
   status openmower_running "${cur##*:}" "$(day_of "$(image_of "$OM")")"
   status openmower_env "$(om_version)"
   available openmower "$OM" "$(repo_of "$cur"):$(om_channel)"
+  # (a newer version came meanwhile: the one left out for the firmware isn't to be tried again)
+  [ -n "$remote" ] && [ -n "$(get openmower_fw)" ] && [ "$(get openmower_fw)" != "$remote" ] && status openmower_fw
+  case $(get openmower_available) in yes* | switch*) check_om_line "$cur" "$(repo_of "$cur"):$(om_channel)" ;; *) status openmower_line ;; esac
   # (the version before its last update, while its registry still has it)
   x=$(get openmower_prev)
   if [ -n "$x" ] && [ "$(repo_of "$x")" = "$(repo_of "$cur")" ] && ! known_as "$(image_of "$OM")" | grep -q "@${x#*@}" && in_registry "$x"; then
@@ -993,7 +1055,16 @@ update_openmower() {
     rebuild_on_om "$target"
     return
   fi
-  failed_has openmower "$remote" && { log "openmower: not again, $target didn't come up before"; outcome openmower skipped_failed; return 0; }
+  if failed_has openmower "$remote"; then
+    # (left out for the firmware: again when asked, after openmower update-firmware)
+    if [ -n "$MANUAL" ] && [ "$(get openmower_fw)" = "$remote" ]; then
+      log "openmower: $target once more, it was left out for the firmware"
+    else
+      log "openmower: not again, $target didn't come up before"
+      outcome openmower skipped_failed
+      return 0
+    fi
+  fi
   [ "$want" != edge ] && exists "$PLANNER" && log "openmower: $want has no OM_PLANNER=external, the MowBite Planner won't work with it"
   # (the layers looked up once: for the room and the bar)
   layers "$target" > "$STATE/layers"
@@ -1056,6 +1127,13 @@ update_openmower() {
   # (its way back by hand: the version before, from its registry again)
   prev=$(prev_of "$before" "$repo")
   d=$(id_of "$target")
+  # (the motors kept off for the firmware already: not the new version's doing)
+  if fw_blocked; then
+    log "openmower: the motors are off for the firmware already, the new version isn't checked for it"
+    status openmower_fw_check off
+  else
+    status openmower_fw_check on
+  fi
   status pending_openmower "$back" "$ref" "$d" "$remote"
   # (from here its .env keeps the version that ran, for the way back)
   status openmower_saved
@@ -1063,6 +1141,8 @@ update_openmower() {
     log "openmower: updated to $target"
     keep_change openmower
     status pending_openmower
+    status openmower_fw_check
+    status openmower_fw
     status openmower_prev ${prev:+"$prev"}
     outcome openmower updated "$(now)" "$want"
     status openmower_available no "$target"

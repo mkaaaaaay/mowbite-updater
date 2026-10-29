@@ -15,6 +15,7 @@ P=${MBT_ID:-mbt}
 REG=127.0.0.1:${MBT_REGISTRY_PORT:-5077}
 MQTT=${MBT_MQTT_PORT:-51877}
 PAGE=${MBT_PAGE_PORT:-58077}
+FEED=${MBT_FEED_PORT:-58177}
 WORK=${MBT_WORK:-$(mktemp -d "${TMPDIR:-/tmp}/mbt.XXXXXX")}
 STACKS=$WORK/stacks
 STATE=$STACKS/updater/.updater
@@ -25,6 +26,7 @@ OUT=ghcr.io/mkaaaaaay/mowbite-updater:latest
 fails=0
 finished=
 gate=
+feed=
 
 case $P in "" | *[!a-z0-9-]*)
   echo "MBT_ID: a-z, 0-9 and -"
@@ -126,16 +128,23 @@ cleanup() {
   docker images -q --filter "label=mbt.run=$P" | sort -u | xargs -r docker rmi -f > /dev/null 2>&1
   docker network ls -q --filter "name=^$P-" | xargs -r docker network rm > /dev/null 2>&1
   [ -n "$gate" ] && kill "$gate" 2> /dev/null
+  [ -n "$feed" ] && kill "$feed" 2> /dev/null
   # (its folder in the stack is root's, the updater runs as root)
   [ -z "${MBT_WORK:-}" ] && docker run --rm --label "mbt.run=$P" -v "$WORK:/work" busybox:1.37-musl rm -rf /work/stacks > /dev/null 2>&1
   [ -z "${MBT_WORK:-}" ] && rm -rf "$WORK"
 }
 
 # a test image <repo>:<tag> in the registry: run (says ready and stays, with /start for a planner built on it), crash
-# (ends at once), nostart (can't be started), bare (stays, nothing for a planner), mowbite (says its version $4)
+# (ends at once), nostart (can't be started), bare (stays, nothing for a planner), mowbite (says its version $4).
+# OpenMower's with a rostopic that gives its emergency's reason from the file state/reason-<tag>
 img() {
   dir=$WORK/img/$1-$2
   mkdir -p "$dir"
+  if [ "$1" = om ]; then
+    printf '#!/bin/sh\nexec sh "$@"\n' > "$dir/bash"
+    : > "$dir/setup.bash"
+    printf '#!/bin/sh\nprintf '"'"'"%%s"\\n---\\n'"'"' "$(cat /state/reason-%s 2> /dev/null)"\n' "$2" > "$dir/rostopic"
+  fi
   {
     echo 'FROM busybox:1.37-musl'
     echo "LABEL mbt.run=$P mbt.version=$1:$2"
@@ -153,6 +162,7 @@ EOF
       printf 'COPY --chmod=755 version /www/cgi-bin/version\nCMD ["httpd", "-f", "-p", "8080", "-h", "/www"]\n'
       ;;
     esac
+    [ "$1" = om ] && printf 'COPY --chmod=755 bash rostopic /bin/\nCOPY setup.bash /opt/open_mower_ros/devel/\n'
   } > "$dir/Dockerfile"
   docker build -q -t "$REG/$P-$1:$2" "$dir" > /dev/null && docker push -q "$REG/$P-$1:$2" > /dev/null
 }
@@ -199,6 +209,10 @@ docker run -d --name "$P-pub" --label "mbt.run=$P" --network host -v "$WORK/stat
   "while :; do mosquitto_pub -h 127.0.0.1 -p $MQTT -t robot_state/json -f /state/robot_state.json; sleep 1; done" > /dev/null
 sleep 3
 kill -0 "$gate" 2> /dev/null || { bad "no front for the registry (port ${REG#*:} taken?)"; exit 1; }
+# OpenMower's releases on github, as their feed: none until its case writes them
+mkdir -p "$WORK/feed"
+python3 -m http.server --bind 127.0.0.1 --directory "$WORK/feed" "$FEED" > /dev/null 2>&1 &
+feed=$!
 
 # the version it starts from, and this checkout
 if [ "${MBT_FROM:-}" != checkout ] && timeout 600 docker buildx imagetools create -t "$REG/$P-updater:a" "$OUT" > /dev/null 2>&1; then
@@ -216,6 +230,9 @@ REL=$(curl -sI -m 15 https://github.com/mkaaaaaay/mowbite/releases/latest | tr -
 for v in v1 v2 v3 v4 v5 dl a3old a3new a3n1 a3n2; do img app "$v" run || bad "app:$v doesn't build"; done
 for v in o1 o2 o3 o4 o6 o7 o8 o9; do img om "$v" run || bad "om:$v doesn't build"; done
 img app broken crash && img om ox nostart && img om o5 bare && img mowbite m1 mowbite 9.0.0-beta.1 || bad "a test image doesn't build"
+# (made a second later than all before them: the first of another version line)
+sleep 1
+img om f1 run && img om f2 run || bad "om:f1 or f2 doesn't build"
 [ $fails -eq 0 ] || exit 1
 O6=$(id_of "$REG/$P-om:o6")
 forget app:dl
@@ -251,6 +268,7 @@ services:
       UPDATER_CONTAINER: $P-updater
       UPDATER_SELF: $P-updater-self
       OPENMOWER_CONTAINER: $P-om
+      OM_RELEASES: http://127.0.0.1:$FEED/releases.atom
       MOWBITE_CONTAINER: $P-mowbite
       PLANNER_CONTAINER: $P-planner
       PRUNE: "0"
@@ -337,6 +355,8 @@ services:
     image: $REG/$P-om:\${VERSION}
     container_name: $P-om
     network_mode: bridge
+    volumes:
+      - $WORK/state:/state:ro
     labels:
       mbt.run: $P
 EOF
@@ -789,6 +809,57 @@ until_true "any('only its own change put back' in l for l in d.get('log', [])) a
 [ "$(perm "$OMENV")" = "$mode" ] && [ ! -e "$OMENV.before-update" ] && ok "with its owner and rights, no copy left" || bad "the file: $(perm "$OMENV")"
 runs_on "$P-om" "$REG/$P-om:o5" && ok "OpenMower as it ran" || bad "OpenMower runs $(docker inspect -f '{{.Image}}' "$P-om")"
 sed -i '/^DEBUG=1$/d' "$OMENV"
+
+say "OpenMower, a version that needs newer firmware"
+post conf 'openmower edge' > /dev/null
+# (two lines: 7.0 with om:o1 as its first release, 7.1 with om:f1, made after all the others)
+printf '<feed>\n<link rel="alternate" type="text/html" href="https://github.com/x/y/releases/tag/%s"/>\n</feed>\n' v7.1.0 7.0.0 7.0.1-beta.1 > "$WORK/feed/releases.atom"
+move om 7.0.0 o1
+move om 7.1.0 f1
+move om edge f1
+printf 'LATCH, FIRMWARE_INCOMPATIBLE' > "$WORK/state/reason-f1"
+t0=$(date +%s)
+post check > /dev/null
+until_true "int(s.get('checked', 0)) >= $t0 and s.get('openmower_available', '').startswith('yes')" 120 &&
+  [ "$(val "s.get('openmower_line')")" = "7.0 7.1" ] && ok "its card says it goes to another version line (7.0 -> 7.1)" ||
+  bad "the line: $(val "s.get('openmower_line')"), $(val "s.get('openmower_available')")"
+post now=openmower > /dev/null
+until_true "s.get('openmower', '').startswith('rolled_back') and s.get('result') != 'running'" 420 && runs_on "$P-om" "$REG/$P-om:o5" &&
+  [ "$(said openmower)" = rolled_back ] && [ "$(val "s.get('openmower', '').split(' ')[-1]")" = firmware ] &&
+  ok "the motors kept off: back on the version that ran, its card says it's the firmware" ||
+  bad "openmower: $(val "s.get('openmower')"), runs $(docker inspect -f '{{.Image}}' "$P-om")"
+[ "$(log_has 'it needs newer firmware (openmower update-firmware)')" = True ] && ok "its log says what to do" || bad "nothing in its log"
+[ -n "$(val "s.get('openmower_fw')")" ] && [ -z "$(val "s.get('openmower_fw_check')")" ] && ok "left out for the firmware" ||
+  bad "for the firmware: $(val "s.get('openmower_fw')"), check $(val "s.get('openmower_fw_check')")"
+t0=$(date +%s)
+post check > /dev/null
+until_true "int(s.get('checked', 0)) >= $t0 and s.get('openmower_available', '').startswith('failed')" 120 &&
+  [ -n "$(val "s.get('openmower_fw')")" ] && ok "a look leaves it out, still to be tried again" ||
+  bad "after a look: $(val "s.get('openmower_available')"), $(val "s.get('openmower_fw')")"
+# (openmower update-firmware)
+rm -f "$WORK/state/reason-f1"
+post now=openmower > /dev/null
+until_true "s.get('openmower', '').startswith('updated') and s.get('result') != 'running'" 300 && runs_on "$P-om" "$REG/$P-om:f1" &&
+  ok "tapped again after the firmware update: it runs" || bad "again: $(val "s.get('openmower')"), runs $(docker inspect -f '{{.Image}}' "$P-om")"
+[ -z "$(val "s.get('openmower_fw')")" ] && [ -z "$(val "s.get('openmower_fw_check')")" ] && ok "nothing left out for the firmware any more" ||
+  bad "still: $(val "s.get('openmower_fw')"), check $(val "s.get('openmower_fw_check')")"
+
+say "OpenMower, the motors off for the firmware already before"
+printf 'FIRMWARE_INCOMPATIBLE' > "$WORK/state/reason-f1"
+printf 'FIRMWARE_INCOMPATIBLE' > "$WORK/state/reason-f2"
+move om edge f2
+t0=$(date +%s)
+post check > /dev/null
+until_true "int(s.get('checked', 0)) >= $t0 and s.get('openmower_available', '').startswith('yes')" 120 &&
+  [ -z "$(val "s.get('openmower_line')")" ] && ok "the same version line: nothing said" || bad "the line: $(val "s.get('openmower_line')")"
+# (its card says updated from the tap before: this one's result by its time)
+t0=$(date +%s)
+post now=openmower > /dev/null
+until_true "s.get('openmower', '').startswith('updated') and int(s.get('openmower_at', 0)) >= $t0 and s.get('result') != 'running'" 300 &&
+  runs_on "$P-om" "$REG/$P-om:f2" &&
+  [ "$(log_has 'off for the firmware already')" = True ] && ok "updated, the new version isn't blamed for it" ||
+  bad "openmower: $(val "s.get('openmower')"), runs $(docker inspect -f '{{.Image}}' "$P-om")"
+rm -f "$WORK/state/reason-f1" "$WORK/state/reason-f2" "$WORK/feed/releases.atom"
 
 say "the night"
 move om edge o7

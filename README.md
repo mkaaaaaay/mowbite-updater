@@ -94,6 +94,9 @@ Without a check it waits for Docker's own health check, or else half a minute wi
 
 - **OpenMower:** it switches between edge, release (`latest`) and the version in its `.env` and updates only the
   OpenMower container. The MowBite Planner needs edge for now, the page warns you.
+- **OpenMower and its firmware:** a new OpenMower that keeps the motors off because the firmware is too old goes back
+  to the version before by itself, its card says so. Run `openmower update-firmware`, then tap "Try again". Before an
+  update to another version line (1.3 to 1.4) the card warns you.
 - **OpenMowerOS 3:** there OpenMower updates with the system (`openmower update-os`). The updater leaves OpenMower alone
   and keeps the other apps up to date.
 - **Apps built from GitHub** (like the MowBite Planner): built again when GitHub has something new. A build that
