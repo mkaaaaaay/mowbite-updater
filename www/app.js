@@ -50,6 +50,7 @@ const DE = {
   "The last run waited: the mower wasn't ready in the dock. It tries again every 10 minutes for 3 hours.":
     'Der letzte Lauf hat gewartet: Der Mäher stand nicht bereit im Dock. Er versucht es 3 Stunden lang alle 10 Minuten wieder.',
   "The last run waited: the mower wasn't ready in the dock.": 'Der letzte Lauf hat gewartet: Der Mäher stand nicht bereit im Dock.',
+  'The last run waited: the schedule starts the mower soon.': 'Der letzte Lauf hat gewartet: Der Zeitplan startet den Mäher bald.',
   'The last run was stopped halfway (the mower or the updater restarted), what had not started yet was put back.':
     'Der letzte Lauf wurde mittendrin unterbrochen (Mäher oder Updater neu gestartet), was noch nicht lief, wurde zurückgesetzt.',
   'The updater did not answer.': 'Der Updater hat nicht geantwortet.',
@@ -164,6 +165,9 @@ const DE = {
   'stopped, it stays stopped as it was': 'gestoppt, er bleibt gestoppt, wie er war',
   "not done: the mower wasn't ready in the dock. Tap again when it's there.": 'nicht gemacht: Der Mäher stand nicht bereit im Dock. Noch einmal tippen, wenn er dort steht.',
   "not done: the mower wasn't ready in the dock": 'nicht gemacht: Der Mäher stand nicht bereit im Dock',
+  'not done: the schedule starts the mower {when}, OpenMower is left alone until then':
+    'nicht gemacht: Der Zeitplan startet den Mäher {when}, bis dahin bleibt OpenMower, wie es ist',
+  "nothing restarted: MowBite's schedule couldn't be held (mqtt)": 'nichts neu gestartet: Der Zeitplan von MowBite ließ sich nicht anhalten (MQTT)',
   'there is no version before to go back to': 'es gibt keine vorige Version zum Zurückgehen',
   "The version before didn't start, the one from before runs again.": 'Die vorige Version startete nicht, es läuft wieder die bisherige.',
   'going back failed, {name} may not be running': 'Zurückgehen fehlgeschlagen, {name} läuft womöglich nicht',
@@ -558,6 +562,7 @@ const ERRORS = {
   helper: "the update of itself didn't start, the updater stays as it is",
   no_stable: 'no stable release found',
   base_missing: "not built: the OpenMower image it's built on isn't on the mower",
+  hold: "nothing restarted: MowBite's schedule couldn't be held (mqtt)",
 };
 function result(p) {
   const [state, ...rest] = S(p.id).split(' ');
@@ -593,6 +598,8 @@ function result(p) {
         : warn(tr('not updated: {name} is stopped right now', {name: nameOf(p)}));
     case 'error':
       if (rest[0] === 'not_docked') return warn(tr("not done: the mower wasn't ready in the dock. Tap again when it's there."));
+      // (OpenMower, in the 30 minutes before MowBite's schedule may start the mower)
+      if (rest[0] === 'schedule') return ok(tr('not done: the schedule starts the mower {when}, OpenMower is left alone until then', {when: when(rest[1])}));
       if (rest[0] === 'no_back') return warn(tr('there is no version before to go back to'));
       if (rest[0] === 'back') return warn(tr("The version before didn't start, the one from before runs again."));
       if (rest[0] === 'compose' && p.id === 'updater') return {text: tr("The updater doesn't run from a compose file and can't update itself."), level: 'error'};
@@ -714,6 +721,8 @@ function nightWindow() {
 function lastRun() {
   const r = S('result');
   if (r === 'waiting') {
+    if (S('openmower').startsWith('error schedule') && !ALL().some((p) => S(p.id) === 'error not_docked'))
+      return dim(tr('The last run waited: the schedule starts the mower soon.'));
     if (askedFor.startsWith('now') || ALL().some((p) => S(p.id) === 'error not_docked'))
       return h('p', {class: 'warn'}, tr("Nothing updated: the mower wasn't ready in the dock. Tap again when it's there."));
     return dim(nightWindow()

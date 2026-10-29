@@ -13,7 +13,9 @@
 # it looks every 6 hours whether there's something new, updates a part when asked (its page, MowBite) and the automatic
 # ones at the time and on the days set. a part counts as updated when it runs on its new image and answers, otherwise
 # it goes back to what ran before and leaves that version out (OpenMower also when the new version keeps the motors off
-# for the firmware); restarted again only while OpenMower doesn't drive the mower. only with room to spare. all through
+# for the firmware); restarted again only while OpenMower doesn't drive the mower. OpenMower and builds restart with
+# MowBite's schedule held (mowbite/hold), OpenMower not in the 30 minutes before the schedule may start the mower
+# (mowbite/schedule/next). only with room to spare. all through
 # the stacks' own compose files, so dockge shows the same, files changed keep owner and rights, only its own change is
 # ever put back. stopped halfway (power gone), it puts back what it changed and looks again at what it had restarted, at
 # its next start. images built here aren't replaced or deleted by itself. last the leftovers go: its older rollback
@@ -48,9 +50,10 @@ up() { cut -d. -f1 /proc/uptime; }
 
 # --- the mower ---
 
-# the broker's user and password in mosquitto_sub's own options file, written at its start: not on its command line,
-# where ps shows them (an empty password can only go there)
+# the broker's user and password in mosquitto_sub's and mosquitto_pub's own options files, written at its start: not on
+# their command line, where ps shows them (an empty password can only go there)
 MQTT_OPTS=${XDG_CONFIG_HOME:-$HOME/.config}/mosquitto_sub
+MQTT_PUB_OPTS=${XDG_CONFIG_HOME:-$HOME/.config}/mosquitto_pub
 # the mower as OpenMower says it right now over mqtt (nothing the broker kept from before): "1" idle in the dock, else
 # "0 <state>" (MOWING, IDLE out of the dock or with the dock's power gone, unknown while OpenMower doesn't answer),
 # nothing when there's no broker to ask
@@ -81,6 +84,45 @@ mower() {
 docked() { [ "$(mower)" = 1 ]; }
 # OpenMower doesn't drive the mower: idle, in the dock or not, or no answer from it at all. no broker: no telling, so not
 quiet() { case $(mower) in 1 | "0 IDLE" | "0 unknown") return 0 ;; *) return 1 ;; esac; }
+# what the broker keeps on a topic of MowBite's (retained): its last message, nothing when there's none
+retained() {
+  set -- -h "${MQTT_HOST:-127.0.0.1}" -p "${MQTT_PORT:-1883}" -t "${MQTT_PREFIX}$1" -C 1 -W 3
+  [ -n "$MQTT_USER" ] && [ ! -s "$MQTT_OPTS" ] && set -- "$@" -u "$MQTT_USER" -P "$MQTT_PASSWORD"
+  timeout 10 mosquitto_sub "$@" 2> /dev/null
+}
+retain() {
+  local t="$1"
+  shift
+  set -- -h "${MQTT_HOST:-127.0.0.1}" -p "${MQTT_PORT:-1883}" -t "${MQTT_PREFIX}$t" -r "$@"
+  [ -n "$MQTT_USER" ] && [ ! -s "$MQTT_PUB_OPTS" ] && set -- "$@" -u "$MQTT_USER" -P "$MQTT_PASSWORD"
+  timeout 10 mosquitto_pub "$@" 2> /dev/null
+}
+# MowBite's schedule starts nothing while it holds it: {"until":<unix s>}, set before OpenMower or a build restarts
+# (what the schedule started then would stand in the garden), gone once that's done. one left by an updater stopped
+# halfway runs out by itself: HOLD_FOR covers a restart, its look and the way back. a start sent just before shows in
+# the mower's state after HOLD_WAIT
+HOLD_FOR=1500
+HOLD_WAIT=${UPDATER_HOLD_WAIT:-10}
+held=
+hold() {
+  retain mowbite/hold -m "{\"until\":$(($(now) + HOLD_FOR))}" || { log "$1: MowBite's schedule can't be held (mqtt), not restarted"; return 1; }
+  held=1
+  sleep "$HOLD_WAIT"
+}
+unhold() {
+  [ -n "$held" ] || return 0
+  held=
+  retain mowbite/hold -n || log "MowBite's schedule still held, it runs out by itself"
+}
+# when MowBite's schedule may start the mower within 30 minutes or right now (it says from when to when, retained
+# {"from":<unix s>,"to":<unix s>}): from when. nothing said, nothing soon
+soon() {
+  local n from to
+  n=$(retained mowbite/schedule/next)
+  from=$(printf '%s' "$n" | sed -n 's/.*"from": *\([0-9]*\).*/\1/p')
+  to=$(printf '%s' "$n" | sed -n 's/.*"to": *\([0-9]*\).*/\1/p')
+  [ -n "$from" ] && [ -n "$to" ] && [ $(($(now) + 1800)) -ge "$from" ] && [ "$(now)" -le "$to" ] && echo "$from"
+}
 # OpenMowerOS 3: open_mower_ros is part of the os there, updated with it (openmower update-os)
 new_os() { grep -qx 'ID=openmower-os' /host/os-release 2> /dev/null; }
 # whether OpenMower keeps the motors off for a firmware that doesn't fit it (FIRMWARE_INCOMPATIBLE in its emergency's
@@ -657,7 +699,10 @@ settle() {
     # shellcheck disable=SC2046
     set -- $(get "pending_$p")
     [ -n "$1" ] || continue
+    # (OpenMower and builds: with the schedule held)
+    case $(kind "$p") in openmower | build) hold "$p" || continue ;; esac
     if ! harmless "$p" && ! quiet; then
+      unhold
       log "$p: still to be seen running, the mower isn't idle, later"
       continue
     fi
@@ -679,6 +724,7 @@ settle() {
     else
       go_back "$p" "$1" "$2" "${4:-$(id_of "$2")}${5:+ $5}"
     fi
+    unhold
   done
   status progress
 }
@@ -1029,7 +1075,7 @@ rebuild_on_om() {
 }
 
 update_openmower() {
-  local ref repo before old_version want target remote need free back rc prev d
+  local ref repo before old_version want target remote need free back rc prev d at
   [ "$(kind openmower)" = openmower ] || return 0
   progress openmower prepare
   running "$OM" || { log "openmower: not running, left as it is"; outcome openmower stopped; return 0; }
@@ -1064,6 +1110,13 @@ update_openmower() {
       outcome openmower skipped_failed
       return 0
     fi
+  fi
+  # not in the 30 minutes before MowBite's schedule may start the mower: the restart would come in between. asked again
+  # before the restart, after the download
+  if at=$(soon); then
+    log "openmower: MowBite's schedule may start the mower at $(date -d "@$at" '+%F %T'), it stays as it is until then"
+    outcome openmower error schedule "$at"
+    return 2
   fi
   [ "$want" != edge ] && exists "$PLANNER" && log "openmower: $want has no OM_PLANNER=external, the MowBite Planner won't work with it"
   # (the layers looked up once: for the room and the bar)
@@ -1102,8 +1155,14 @@ update_openmower() {
   # only OpenMower itself: the stack's other containers (its app, the broker) stay as they are
   with_progress openmower mower compose $T_PULL "$OM" --progress json pull "$(service "$OM")"
   rc=$?
-  # the last word before it restarts: still in the dock, and its .env still says that version (dockge meanwhile)
-  if [ $rc -eq 0 ] && ! docked; then
+  # the last word before it restarts: no start of the schedule soon, the schedule held, still in the dock, and its .env
+  # still says that version (dockge meanwhile)
+  if [ $rc -eq 0 ] && at=$(soon); then
+    log "openmower: MowBite's schedule may start the mower at $(date -d "@$at" '+%F %T'), it stays as it is until then"
+    rc=5
+  elif [ $rc -eq 0 ] && ! hold openmower; then
+    rc=4
+  elif [ $rc -eq 0 ] && ! docked; then
     log "openmower: the mower left the dock, it stays as it is"
     rc=2
   elif [ $rc -eq 0 ] && [ "$(om_version)" != "$want" ]; then
@@ -1111,7 +1170,8 @@ update_openmower() {
     rc=3
   fi
   if [ $rc -ne 0 ]; then
-    case $rc in 2 | 3) ;; *) log "openmower: pull failed, it stays as it is" ;; esac
+    unhold
+    case $rc in 2 | 3 | 4 | 5) ;; *) log "openmower: pull failed, it stays as it is" ;; esac
     undo_change openmower
     om_saved_back
     undo_back "$back" "$ref"
@@ -1120,6 +1180,8 @@ update_openmower() {
     case $rc in
     2) return 2 ;;
     3) outcome openmower error env ;;
+    4) outcome openmower error hold ;;
+    5) outcome openmower error schedule "$at" && return 2 ;;
     *) outcome openmower error pull ;;
     esac
     return 1
@@ -1138,6 +1200,7 @@ update_openmower() {
   # (from here its .env keeps the version that ran, for the way back)
   status openmower_saved
   if restart openmower "$d"; then
+    unhold
     log "openmower: updated to $target"
     keep_change openmower
     status pending_openmower
@@ -1151,7 +1214,10 @@ update_openmower() {
     rebuild_on_om "$target" new
     return
   fi
-  go_back openmower "$back" "$ref" "$d $remote" || return 1
+  go_back openmower "$back" "$ref" "$d $remote"
+  rc=$?
+  unhold
+  [ $rc -eq 0 ] || return 1
   [ "$target" = "$ref" ] || docker rmi "$target" > /dev/null 2>&1
   return 1
 }
@@ -1187,11 +1253,13 @@ back_openmower() {
   2) undo_back "$back" "$ref" && return 2 ;;
   *) log "openmower: pull of $prev failed"; undo_back "$back" "$ref"; outcome openmower error pull; return 1 ;;
   esac
-  docked || { log "openmower: the mower left the dock, it stays as it is"; undo_back "$back" "$ref"; return 2; }
+  hold openmower || { undo_back "$back" "$ref"; outcome openmower error hold; return 1; }
+  docked || { unhold; log "openmower: the mower left the dock, it stays as it is"; undo_back "$back" "$ref"; return 2; }
   log "openmower: kept the version that ran as $back, back to $prev"
   d=$(digest_of "$before" "$repo")
   docker tag "$prev" "$ref"
   if restart openmower "$(id_of "$prev")"; then
+    unhold
     # (the one it left is GBs, none is kept, as after an update)
     docker rmi "$back" > /dev/null 2>&1
     status openmower_failed "$before" ${d:+"$d"}
@@ -1208,6 +1276,7 @@ back_openmower() {
   else
     outcome openmower error rollback
   fi
+  unhold
   return 1
 }
 
@@ -1274,14 +1343,18 @@ build() {
   with_progress "$p" "$(gate "$p")" compose $T_BUILD "$c" --progress json build "$(service "$c")"
   rc=$?
   [ $rc -eq 0 ] || [ $rc -eq 2 ] || log "$p: the build failed, the one before keeps running"
-  if [ $rc -eq 0 ] && [ "$(gate "$p")" = mower ] && ! docked; then
+  # (with MowBite's schedule held: the mower relies on it while it mows)
+  if [ $rc -eq 0 ] && [ "$(gate "$p")" = mower ] && ! hold "$p"; then
+    rc=4
+  elif [ $rc -eq 0 ] && [ "$(gate "$p")" = mower ] && ! docked; then
     log "$p: the mower left the dock, the one before keeps running"
     rc=2
   fi
   if [ $rc -ne 0 ]; then
+    unhold
     undo_back "$back" "$img"
     [ $rc -eq 2 ] && return 2
-    outcome "$p" error build
+    if [ $rc -eq 4 ]; then outcome "$p" error hold; else outcome "$p" error build; fi
     return 1
   fi
   built=$(id_of "$img")
@@ -1371,6 +1444,7 @@ check_part() {
   esac
 }
 update_part() {
+  local rc
   case $(kind "$1") in
   openmower) update_openmower ;;
   image) update_image "$1" ;;
@@ -1378,6 +1452,10 @@ update_part() {
   local) outcome "$1" local ;;
   os) outcome openmower os ;;
   esac
+  rc=$?
+  # (whatever came of it: the schedule isn't held any more)
+  unhold
+  return $rc
 }
 
 # --- stopped halfway ---
@@ -1819,10 +1897,11 @@ chmod 700 "$STATE"
 find "$STATE" -maxdepth 1 \( -name 'status.??????' -o -name 'log.??????' -o -name 'conf.??????' -o -name 'room.??????' \) -mmin +1 -exec rm -f {} + 2> /dev/null
 # (for its interface, so it needs no docker to find its folder)
 printf '%s\n' "$STATE" > /tmp/updater-state
-# the broker's user and password for mosquitto_sub, see mqtt. (it takes the rest of the line, spaces too. an empty
+# the broker's user and password for mosquitto_sub and mosquitto_pub, see mqtt. (it takes the rest of the line, spaces too. an empty
 # password: on its command line)
-rm -f "$MQTT_OPTS"
-[ -n "$MQTT_USER" ] && [ -n "$MQTT_PASSWORD" ] && mkdir -p "${MQTT_OPTS%/*}" && (umask 077 && printf -- '-u %s\n-P %s\n' "$MQTT_USER" "$MQTT_PASSWORD" > "$MQTT_OPTS")
+rm -f "$MQTT_OPTS" "$MQTT_PUB_OPTS"
+[ -n "$MQTT_USER" ] && [ -n "$MQTT_PASSWORD" ] && mkdir -p "${MQTT_OPTS%/*}" &&
+  (umask 077 && printf -- '-u %s\n-P %s\n' "$MQTT_USER" "$MQTT_PASSWORD" > "$MQTT_OPTS" && cp "$MQTT_OPTS" "$MQTT_PUB_OPTS")
 serve
 log "started"
 # a new version of itself since it last started (its own update, or one by hand in dockge), or the one before back
@@ -1889,6 +1968,7 @@ while :; do
             status result running
             status taken
             if [ "$a" = openmower ]; then back_openmower; else back_image "$a"; fi
+            unhold
             status progress
             status run_parts
             status result "done"

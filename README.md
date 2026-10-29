@@ -13,6 +13,8 @@ by itself.
   itself at night, if you switch that on. Out of the box, nothing updates by itself.
 - Only while the mower is idle in the dock: at night it tries again every 10 minutes, a tap while the mower is out
   isn't done and its card says so. It stops if the mower drives off.
+- With MowBite's schedule: it holds the schedule's starts while it restarts OpenMower or the planner, and leaves
+  OpenMower as it is in the 30 minutes before the schedule starts the mower.
 - Checks that the new version really works. If not, it goes back to the old version.
 - Checks there's enough free space first and cleans up old versions afterwards.
 - Shows what it does from the moment you tap: a progress bar while it gets ready, downloads and restarts an app, and

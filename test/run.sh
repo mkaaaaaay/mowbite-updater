@@ -96,6 +96,14 @@ envv() { sed -n 's/^VERSION=//p' "$OMENV"; }
 # its status written the way it writes it
 in_updater() { docker exec "$P-updater" sh -c ". /lib.sh; $1"; }
 
+# the broker, as MowBite's scheduler and the updater use it: what it keeps on a topic, a message kept on it
+kept() { docker exec "$P-broker" mosquitto_sub -h 127.0.0.1 -t "$1" -C 1 -W 2 2> /dev/null; }
+keep() {
+  t=$1
+  shift
+  docker exec "$P-broker" mosquitto_pub -h 127.0.0.1 -t "$t" -r "$@"
+}
+
 # the registry's front (test/gate.py): the daemon's download from a repository held, or no answer at all
 hold() { echo "$P-$1" > "$WORK/gate/hold"; }
 release() { rm -f "$WORK/gate/hold"; }
@@ -267,6 +275,7 @@ services:
       MQTT_PASSWORD: mbt-secret
       UPDATER_CONTAINER: $P-updater
       UPDATER_SELF: $P-updater-self
+      UPDATER_HOLD_WAIT: "2"
       OPENMOWER_CONTAINER: $P-om
       OM_RELEASES: http://127.0.0.1:$FEED/releases.atom
       MOWBITE_CONTAINER: $P-mowbite
@@ -705,11 +714,29 @@ grep -qx 'OM_PLANNER=external' "$OMENV" && grep -qx '# made-up OpenMower' "$OMEN
 [ "$(perm "$OMENV")" = "$mode" ] && [ ! -e "$OMENV.before-update" ] && ok "with its owner and rights, no copy left" || bad "the file: $(perm "$OMENV")"
 [ "$(val "len(s.get('openmower_failed', '').split())")" = 2 ] && ok "that version left out" || bad "left out: $(val "s.get('openmower_failed')")"
 
+say "OpenMower, MowBite's schedule starts the mower soon"
+post conf 'openmower edge' > /dev/null
+soon=$(($(date +%s) + 600))
+keep mowbite/schedule/next -m "{\"from\":$soon,\"to\":$soon}"
+post now=openmower > /dev/null
+until_true "s.get('openmower', '') == 'error schedule $soon' and s.get('result') != 'running'" 120 && runs_on "$P-om" "$REG/$P-om:o1" &&
+  [ "$(envv)" = '"v1"' ] && ok "left as it is, its card says when the schedule starts it" ||
+  bad "openmower: $(val "s.get('openmower')"), runs $(docker inspect -f '{{.Image}}' "$P-om"), its .env $(envv)"
+keep mowbite/schedule/next -n
+
 say "OpenMower, another channel"
 post conf 'openmower edge' > /dev/null
+# (what the updater says on mowbite/hold meanwhile)
+docker exec -d "$P-broker" sh -c 'mosquitto_sub -h 127.0.0.1 -t mowbite/hold > /tmp/hold.log'
+t0=$(date +%s)
 post now=openmower > /dev/null
 until_true "s.get('openmower', '').startswith('updated') and s.get('result') != 'running'" 240 && runs_on "$P-om" "$REG/$P-om:o2" &&
   ok "on edge" || bad "edge: $(val "s.get('openmower')"), runs $(docker inspect -f '{{.Image}}' "$P-om")"
+u=$(docker exec "$P-broker" sed -n 's/^{"until":\([0-9]*\)}$/\1/p' /tmp/hold.log | head -n1)
+[ -n "$u" ] && [ "$u" -ge $((t0 + 1500)) ] && [ "$u" -le $(($(date +%s) + 1500)) ] && ok "MowBite's schedule held for 25 minutes before the restart" ||
+  bad "the hold: $(docker exec "$P-broker" cat /tmp/hold.log | tr '\n' '|')"
+[ -z "$(kept mowbite/hold)" ] && ok "and no more once it's done" || bad "still held: $(kept mowbite/hold)"
+docker exec "$P-broker" pkill mosquitto_sub
 [ "$(envv)" = '"edge"' ] && [ "$(perm "$OMENV")" = "$mode" ] && ok "its .env says edge, its owner and rights kept" || bad "its .env: $(envv), $(perm "$OMENV")"
 docker image inspect "$REG/$P-om:v1" > /dev/null 2>&1 && bad "the tag v1 is still here" || ok "the tag it ran from is gone, nothing names it"
 case $(val "s.get('openmower_prev', '')") in "$REG/$P-om@sha256:"*) ok "its way back noted" ;; *) bad "no way back: $(val "s.get('openmower_prev')")" ;; esac
