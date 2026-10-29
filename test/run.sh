@@ -1,7 +1,7 @@
 #!/bin/sh
 # the updater against a mower of its own on this docker: a registry, a broker with a made-up mower state, OpenMower with
 # its .env, MowBite, the planner built on OpenMower, small apps in stacks. it starts from the updater that's out
-# (ghcr.io; MBT_FROM=checkout or without ghcr: from a build of this checkout) and updates that to this checkout the way
+# (ghcr.io, the run fails without it; MBT_FROM=checkout: from a build of this checkout) and updates that to this checkout the way
 # each mower does, then each case through its interface, the way its page and MowBite use it, and a look at what runs
 # and at the files it changed. only what's labelled mbt.run=<id> or named <id>-* is made here (MBT_ID, default mbt) and
 # cleared away afterwards, also when it's stopped; a second run at the same time needs another MBT_ID and other
@@ -225,12 +225,15 @@ python3 -m http.server --bind 127.0.0.1 --directory "$WORK/feed" "$FEED" > /dev/
 feed=$!
 
 # the version it starts from, and this checkout
-if [ "${MBT_FROM:-}" != checkout ] && timeout 600 docker buildx imagetools create -t "$REG/$P-updater:a" "$OUT" > /dev/null 2>&1; then
+if [ "${MBT_FROM:-}" = checkout ]; then
+  from="from a build of this checkout"
+  updater_img a a000000test || { bad "the updater doesn't build"; exit 1; }
+elif timeout 600 docker buildx imagetools create -t "$REG/$P-updater:a" "$OUT" > /dev/null 2>&1; then
   from="from $OUT"
 else
-  from="from a build of this checkout"
-  [ "${MBT_FROM:-}" = checkout ] || echo "   ($OUT can't be had: it starts $from)"
-  updater_img a a000000test || { bad "the updater doesn't build"; exit 1; }
+  # (the mowers update from that one, a test from anything else says nothing about them)
+  bad "$OUT can't be had, MBT_FROM=checkout starts from a build of this checkout instead"
+  exit 1
 fi
 updater_img b b000000test || { bad "the updater doesn't build"; exit 1; }
 move updater latest a

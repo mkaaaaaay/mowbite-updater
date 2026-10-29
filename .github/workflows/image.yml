@@ -5,7 +5,7 @@ on:
     branches: [main]
     tags: ['v*']
     # (nothing that goes into the image: the readme, the license, the tests, its compose.yaml or this workflow. no new
-    # image, every updater would update to the same)
+    # image, every updater would update to the same. check.yml looks at those)
     paths-ignore: ['README.md', 'LICENSE', '.gitignore', '.github/**', 'test/**', 'compose.yaml']
   workflow_dispatch:
 
@@ -40,7 +40,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/${{ github.repository_owner }}/mowbite-updater
+          images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
@@ -58,8 +58,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:v0.11.0 -s sh -e SC1091,SC3043,SC2034,SC2015,SC2016,SC2153 /mnt/updater.sh /mnt/lib.sh /mnt/self.sh /mnt/www/cgi-bin/updater /mnt/www/cgi-bin/index.cgi /mnt/test/run.sh
-      - run: node --check www/app.js
+      # (the same as check.yml on every push)
+      - run: sh test/static.sh
 
   # the updater against a made-up mower on the runner's docker: its interface, update and back, a version that doesn't
   # start, the mower out, stopped halfway, picked apps, stable, OpenMower with its .env and the planner built on it, the
