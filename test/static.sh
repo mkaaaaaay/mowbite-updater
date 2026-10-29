@@ -1,6 +1,7 @@
 #!/bin/sh
 # the checks that need no mower, on every push: shellcheck, the page's javascript, compose.yaml with the image, the name
-# and the port the mowers and MowBite know it by, and image.yml only building once the checks and the tests passed.
+# and the port the mowers and MowBite know it by, and image.yml only building once the checks, the tests and the commit
+# check passed.
 # (shellcheck and yq come from their images, the same versions here and in the ci)
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -31,7 +32,7 @@ yq=mikefarah/yq:4.53.6
 docker image inspect "$yq" > /dev/null 2>&1 || docker pull -q "$yq" > /dev/null
 needs=$(docker run --rm -i "$yq" '.jobs.image.needs[]' < .github/workflows/image.yml)
 miss=
-for job in check test; do printf '%s\n' "$needs" | grep -qx "$job" || miss="$miss $job"; done
+for job in check test commits; do printf '%s\n' "$needs" | grep -qx "$job" || miss="$miss $job"; done
 if [ -z "$miss" ]; then ok image.yml; else bad image.yml "the image doesn't wait for:$miss"; fi
 
 [ $fail = 0 ]

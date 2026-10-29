@@ -20,7 +20,7 @@ permissions:
 jobs:
   # only once the checks and the tests went through: the updaters on the mowers take it from here
   image:
-    needs: [check, test]
+    needs: [check, test, commits]
     runs-on: ubuntu-latest
     # (only this job writes to the registry)
     permissions:
@@ -53,6 +53,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  commits:
+    uses: ./.github/workflows/commits.yml
+    secrets:
+      COMMIT_RULES: ${{ secrets.COMMIT_RULES }}
 
   check:
     runs-on: ubuntu-latest
