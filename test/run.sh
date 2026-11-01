@@ -632,8 +632,12 @@ t0=$(date +%s)
 post "now=$APP" > /dev/null
 until_true "s.get('$APP', '').startswith('rolled_back') and s.get('result') != 'running'" 400 && runs_on "$P-app" "$REG/$P-app:v2" &&
   ok "back on v2, not pulled again on the way (pull_policy: always)" || bad "not back: $(val "s.get('$APP')"), runs $(docker inspect -f '{{.Image}}' "$P-app")"
-[ "$(val "len(s.get('${APP}_failed', '').split())")" = 2 ] && ok "the broken one is left out, by its id and its digest" ||
-  bad "left out: $(val "s.get('${APP}_failed')")"
+# (by each digest it has here: with docker's older image store one pushed under two tags has two)
+d=$(docker buildx imagetools inspect "$REG/$P-app:latest" --format '{{.Manifest.Digest}}' 2> /dev/null)
+case " $(val "s.get('${APP}_failed', '')") " in
+*" $(id_of "$REG/$P-app:broken") "*" $d "* | *" $d "*" $(id_of "$REG/$P-app:broken") "*) ok "the broken one is left out, by its id and its digest" ;;
+*) bad "left out: $(val "s.get('${APP}_failed')"), the registry has $d" ;;
+esac
 until_true "int(s.get('checked', 0)) >= $t0 and s.get('${APP}_available', '').startswith('failed')" 120 && ok "its card says so" ||
   bad "its card: $(val "s.get('${APP}_available')")"
 broken=$(id_of "$REG/$P-app:broken")
