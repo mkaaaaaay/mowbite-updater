@@ -266,6 +266,8 @@ built_here() {
 }
 # the registry's digest an image came with from repository $2, empty for one built here
 digest_of() { digests "$1" | tr ' ' '\n' | awk -F@ -v r="$2" '$1 == r {print $2; exit}'; }
+# all the digests it came with from repository $2 (one pushed under more tags has more), in one line
+digests_in() { digests "$1" | tr ' ' '\n' | awk -F@ -v r="$2" '$1 == r {printf "%s%s", s, $2; s = " "}'; }
 # where an image can be had again from repository $2 by its digest: <repo>@<digest>
 prev_of() {
   local d
@@ -273,7 +275,7 @@ prev_of() {
   [ -n "$d" ] && echo "$2@$d"
 }
 # whether a version of a part is left out because it didn't start: an image id or a registry's digest, any of the words
-# of <part>_failed (its image id and its digest, or only one of them)
+# of <part>_failed (its image id and each digest it has in its repository, or only some of them)
 failed_has() { [ -n "$2" ] && case " $(get "$1_failed") " in *" $2 "*) true ;; *) false ;; esac; }
 # a text as a sed pattern
 re() { printf '%s' "$1" | sed 's/[][\.*^$/|]/\\&/g'; }
@@ -782,13 +784,14 @@ go_back() {
 # the parts restarted on a new version and not seen running yet (a run stopped right then, or the mower wasn't idle):
 # started if a restart was cut off, then seen running, or back to the one before
 settle() {
-  local p x
+  local p x left
   for p in $(part_ids); do
     # (pending: the rollback tag, the tag it goes back under, the image it has to run on, what's left out when it doesn't:
     # an image id and its digest, or a commit and the id of its base)
     # shellcheck disable=SC2046
     set -- $(get "pending_$p")
     [ -n "$1" ] || continue
+    left=$(get "pending_$p" | cut -d' ' -f4-)
     # (OpenMower and builds: with the schedule held)
     case $(kind "$p") in openmower | build) hold "$p" || continue ;; esac
     if ! harmless "$p" && ! quiet; then
@@ -812,7 +815,7 @@ settle() {
       # (another tag than before, a channel or a stable release: the one before goes once nothing names it)
       [ "$(ref_of "$(box "$p")")" = "$2" ] || drop_tag "$2"
     else
-      go_back "$p" "$1" "$2" "${4:-$(id_of "$2")}${5:+ $5}"
+      go_back "$p" "$1" "$2" "${left:-$(id_of "$2")}"
     fi
     unhold
   done
@@ -984,8 +987,8 @@ update_image() {
     outcome "$p" skipped_failed
     return 0
   fi
-  # (left out when it doesn't start: its id, and the digest the registry knows it by)
-  d=$(digest_of "$pulled" "$(repo_of "$target")")
+  # (left out when it doesn't start: its id, and the digests the registry knows it by)
+  d=$(digests_in "$pulled" "$(repo_of "$target")")
   log "$p: kept the version before as $back"
   if [ "$target" != "$current" ]; then
     # (the tag it had before stable, to come back to on beta)
@@ -1048,7 +1051,7 @@ back_image() {
   docker tag "$repo:$to" "$current"
   if restart "$p" "$(id_of "$repo:$to")"; then
     docker rmi "$repo:$to" > /dev/null 2>&1
-    d=$(digest_of "$before" "$repo")
+    d=$(digests_in "$before" "$repo")
     status "${p}_failed" "$before" ${d:+"$d"}
     outcome "$p" back "$(now)" "$(version_of "$p")"
     return 0
@@ -1346,7 +1349,7 @@ back_openmower() {
   hold openmower || { undo_back "$back" "$ref"; outcome openmower error hold; return 1; }
   docked || { unhold; log "openmower: the mower left the dock, it stays as it is"; undo_back "$back" "$ref"; return 2; }
   log "openmower: kept the version that ran as $back, back to $prev"
-  d=$(digest_of "$before" "$repo")
+  d=$(digests_in "$before" "$repo")
   docker tag "$prev" "$ref"
   if restart openmower "$(id_of "$prev")"; then
     unhold

@@ -33,9 +33,9 @@ while [ $n -lt 24 ]; do
 done
 
 log "updater: its new version didn't come up, back to the one before"
-# (left out: its id, and the digest its registry knows it by)
+# (left out: its id, and each digest its registry knows it by)
 d=$(docker image inspect -f '{{join .RepoDigests " "}}' "$ref" 2>/dev/null | tr ' ' '\n' |
-  awk -F@ -v r="$(printf '%s' "$ref" | sed 's/@.*//; s/:[^:/]*$//')" '$1 == r {print $2; exit}')
+  awk -F@ -v r="$(printf '%s' "$ref" | sed 's/@.*//; s/:[^:/]*$//')" '$1 == r {printf "%s%s", s, $2; s = " "}')
 status updater_failed "$new" ${d:+"$d"}
 docker tag "$old" "$ref"
 compose 300 "$ME" up -d --no-deps --pull never "$svc" > /dev/null 2>&1
