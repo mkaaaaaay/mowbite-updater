@@ -544,16 +544,20 @@ until_true "int(s.get('checked', 0)) >= $t0" 120 || bad "the look asked for didn
 # one while it looks goes first (not after the look and a minute's sleep): the look stops for it, before its end, and
 # is done again. (how long it takes is a step of the look, a step may wait for its registry. the planner's github slow
 # meanwhile: a look here can be over within a second)
-until_true "not s.get('looking')" 60
+# (one still running before this one is over first: its end isn't this look's)
 : > "$WORK/feed/slow"
+until_true "not s.get('looking')" 60
+sleep 3
+until_true "not s.get('looking')" 60
+c0=$(val "s.get('checked', '')")
 t1=$(date +%s)
 post check > /dev/null
 until_true "s.get('looking')" 30
 post room > /dev/null
 t2=$(date +%s)
-until_true "not d.get('requested')" 120 && [ "$(val "int(s.get('checked', 0)) < $t1")" = True ] &&
+until_true "not d.get('requested')" 120 && [ "$(val "s.get('checked', '')")" = "$c0" ] &&
   ok "a request while it looks is taken at once, the look stops for it ($(($(date +%s) - t2)) s)" ||
-  bad "a request while it looks waited: checked $(val "s.get('checked')"), the look from $t1"
+  bad "a request while it looks waited: checked $(val "s.get('checked')") (before it $c0), the look from $t1"
 rm -f "$WORK/feed/slow"
 until_true "int(s.get('checked', 0)) >= $t1 and not s.get('looking') and not s.get('taken')" 180 && ok "the look done again after it" ||
   bad "the look wasn't done again: checked $(val "s.get('checked')"), looking $(val "s.get('looking')"), taken $(val "s.get('taken')")"
