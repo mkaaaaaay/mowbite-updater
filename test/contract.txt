@@ -38,10 +38,10 @@ env UPDATER_CONTAINER
 env UPDATER_HOLD_WAIT
 env UPDATER_SELF
 env VERSION
+form status <part> updated <unix s> <a release's tag or the commit>, of a build
 form status <part>_available yes|no|failed|unknown <its release's tag or its branch>, of a build
 form status <part>_release <its tag, v0.2.0>, none for its branch
 form status <part>_stable yes|no, also of the planner's build
-form status <part> updated <unix s> <a release's tag or the commit>, of a build
 form status updater_release <its tag, v1.2.0>, none for a build of main
 label mowbite.update.check
 label mowbite.update.gate
@@ -60,37 +60,12 @@ request now
 request now=* | back=*
 request room
 request self
+setting <part>
+setting <part>_auto
 setting at
 setting days
 setting openmower
-setting <part>
-setting <part>_auto
 setting picked
-status alive
-status candidates
-status changed_<part>
-status checked
-status clock
-status disk_free
-status embed
-status looking
-status mowbite_name
-status mowbite_version
-status mower
-status night_done
-status openmowerapp_name
-status openmower_available
-status openmower_back
-status openmower_env
-status openmower_failed
-status openmower_fw
-status openmower_fw_check
-status openmower_gate
-status openmower_line
-status openmower_name
-status openmower_prev
-status openmower_running
-status openmower_saved
 status <part>_at
 status <part>_available
 status <part>_base_id
@@ -104,12 +79,37 @@ status <part>_picked
 status <part>_rebuild
 status <part>_release
 status <part>_running
-status parts
 status <part>_source
 status <part>_stable
 status <part>_stable_older
-status pending_openmower
+status alive
+status candidates
+status changed_<part>
+status checked
+status clock
+status disk_free
+status embed
+status looking
+status mowbite_name
+status mowbite_version
+status mower
+status night_done
+status openmower_available
+status openmower_back
+status openmower_env
+status openmower_failed
+status openmower_fw
+status openmower_fw_check
+status openmower_gate
+status openmower_line
+status openmower_name
+status openmower_prev
+status openmower_running
+status openmower_saved
+status openmowerapp_name
+status parts
 status pending_<part>
+status pending_openmower
 status planner_name
 status progress
 status reach

@@ -23,4 +23,4 @@ part='s/\$\{?(1|p|id)\}?/<part>/g'
   sed -n 's/^ *# form: /form /p' $src
   docker compose -f compose.yaml config --format json |
     jq -r '.services.updater | "compose image \(.image)", "compose container \(.container_name)", "compose network \(.network_mode)", (.volumes[] | "compose volume \(.target)")'
-} | grep -v ' \$$' | sort -u
+} | grep -v ' \$$' | LC_ALL=C sort -u
