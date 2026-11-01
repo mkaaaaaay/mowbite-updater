@@ -162,6 +162,8 @@ jobs:
   test:
     needs: build
     strategy:
+      # (each machine to its end: a failure on one says nothing about the other)
+      fail-fast: false
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
