@@ -542,10 +542,16 @@ post check > /dev/null
 until_true "not d.get('requested')" 15 && ok "a request is taken at once ($(($(date +%s) - t0)) s)" || bad "a request waited longer than 15 s"
 until_true "int(s.get('checked', 0)) >= $t0" 120 || bad "the look asked for didn't happen"
 # one while it looks goes first (not after the look and a minute's sleep): the look stops for it, before its end, and
-# is done again. (how long it takes is a step of the look, a step may wait for its registry)
+# is done again. (how long it takes is a step of the look, a step may wait for its registry. the request comes as soon
+# as the look is under way: a fixed wait was longer than a quick look)
+until_true "not s.get('looking')" 60
 t1=$(date +%s)
 post check > /dev/null
-sleep 2
+i=0
+while [ $i -lt 50 ] && [ "$(val "bool(s.get('looking'))")" != True ]; do
+  sleep 0.2
+  i=$((i + 1))
+done
 post room > /dev/null
 t2=$(date +%s)
 until_true "not d.get('requested')" 120 && [ "$(val "int(s.get('checked', 0)) < $t1")" = True ] &&
