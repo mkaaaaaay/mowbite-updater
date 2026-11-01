@@ -834,9 +834,19 @@ case " $(val "s.get('openmower_failed', '')") " in *" $(id_of "$REG/$P-om:o2") "
 [ "$(envv)" = '"edge"' ] && ok "its .env as it was" || bad "its .env: $(envv)"
 [ "$(val "s.get('planner_base_id')")" = "$(id_of "$REG/$P-om:o1")" ] && ok "the planner built on it again" || bad "the planner on $(val "s.get('planner_base_id')")"
 until_true "s.get('openmower_back') == 'no' and not s.get('looking')" 120 && ok "no further way back" || bad "still offered: $(val "s.get('openmower_back')")"
+left=$(val "s.get('openmower_failed', '')")
 post now=openmower > /dev/null
-until_true "s.get('openmower', '').startswith('skipped_failed') and s.get('result') != 'running'" 120 && runs_on "$P-om" "$REG/$P-om:o1" &&
-  ok "edge isn't taken again" || bad "edge again: $(val "s.get('openmower')")"
+if until_true "s.get('openmower', '').startswith('skipped_failed') and s.get('result') != 'running'" 120 && runs_on "$P-om" "$REG/$P-om:o1"; then
+  ok "edge isn't taken again"
+else
+  bad "edge again: $(val "s.get('openmower')")"
+  # (what it went by, for a failure on a machine of the ci)
+  printf '      %s\n' "docker $(docker info -f '{{.Driver}} {{.ServerVersion}}' 2> /dev/null)" "left out: $left" \
+    "edge in the registry: $(docker buildx imagetools inspect "$REG/$P-om:edge" --format '{{.Manifest.Digest}}' 2> /dev/null)" \
+    "o2 here: $(docker image inspect -f '{{.Id}} {{join .RepoDigests " "}}' "$REG/$P-om:o2" 2> /dev/null)" \
+    "o1 here: $(docker image inspect -f '{{.Id}} {{join .RepoDigests " "}}' "$REG/$P-om:o1" 2> /dev/null)"
+  val "chr(10).join(d.get('log', [])[-15:])" | sed 's/^/      /'
+fi
 
 say "OpenMower, the planner waits for the dock"
 # (as one it never built, deployed in dockge. after the look that follows the run before: nothing writes its status
