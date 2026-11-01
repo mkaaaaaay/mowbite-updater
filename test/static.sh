@@ -1,7 +1,7 @@
 #!/bin/sh
 # the checks that need no mower, on every push: shellcheck, the page's javascript, compose.yaml with the image, the name
-# and the port the mowers and MowBite know it by, the contract (test/contract.txt), and image.yml only building once the checks, the tests and the commit
-# check passed.
+# and the port the mowers and MowBite know it by, the contract (test/contract.txt), image.yml only building once the checks, the tests and the commit
+# check passed, and a version's tag, release and names (test/release.sh).
 # (shellcheck and yq come from their images, the same versions here and in the ci)
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -10,7 +10,7 @@ ok() { echo "$1 ok"; }
 bad() { echo "$1 FAILED${2:+: $2}"; fail=1; }
 
 if docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:v0.11.0 -s sh -e SC1091,SC3043,SC2034,SC2015,SC2016,SC2153 \
-  /mnt/updater.sh /mnt/lib.sh /mnt/self.sh /mnt/www/cgi-bin/updater /mnt/www/cgi-bin/index.cgi /mnt/test/run.sh /mnt/test/static.sh /mnt/test/contract.sh; then
+  /mnt/updater.sh /mnt/lib.sh /mnt/self.sh /mnt/www/cgi-bin/updater /mnt/www/cgi-bin/index.cgi /mnt/test/run.sh /mnt/test/static.sh /mnt/test/contract.sh /mnt/test/release.sh; then
   ok shellcheck
 else
   bad shellcheck
@@ -42,5 +42,7 @@ needs=$(docker run --rm -i "$yq" '.jobs.image.needs[]' < .github/workflows/image
 miss=
 for job in check test commits; do printf '%s\n' "$needs" | grep -qx "$job" || miss="$miss $job"; done
 if [ -z "$miss" ]; then ok image.yml; else bad image.yml "the image doesn't wait for:$miss"; fi
+# a version's way out: the tag's check, its release and the image's names (test/release.sh)
+if sh test/release.sh; then ok release; else bad release; fi
 
 [ $fail = 0 ]

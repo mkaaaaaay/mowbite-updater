@@ -82,6 +82,8 @@ conf() {
 }
 valid() { printf '%s' "$1" | grep -Eq "^($2)\$"; }
 TAG='[A-Za-z0-9][A-Za-z0-9._-]{0,63}'
+# a release's version: 1.2.0, 1.2.0-beta.1
+VERSION_RE='[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(-[0-9A-Za-z.]{1,32})?'
 ID='[a-z][a-z0-9_]{0,40}'
 
 # the parts it looks after, as found at the last look (status "parts"): "<id>:<container>:<kind>" each

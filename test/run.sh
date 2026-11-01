@@ -192,6 +192,7 @@ updater_img() {
     {
       if [ -z "${3:-}" ]; then echo "FROM $MBT_IMAGE"; else echo "FROM $REG/$P-updater:b"; fi
       echo "LABEL mbt.run=$P org.opencontainers.image.revision=$2"
+      [ -n "${4:-}" ] && echo "LABEL org.opencontainers.image.version=$4"
       [ "${3:-}" = broken ] && echo 'ENTRYPOINT ["sh", "-c", "exit 1"]'
     } > "$dir/Dockerfile"
     docker build -q -t "$REG/$P-updater:$1" "$dir" > /dev/null
@@ -475,6 +476,9 @@ until_true "s.get('updater', '').startswith('updated') and 'b000000' in s.get('u
   ok "it updates itself to this checkout" || bad "not to this checkout: $(val "s.get('updater')"), runs $(val "s.get('updater_running')")"
 [ "$(val "c.get('at') + ' ' + c.get('days')")" = "$FAR 1,3,5" ] && ok "with the settings it had" || bad "its settings: $(val 'c')"
 [ -z "$(val "s.get('updater_failed')")" ] && ok "nothing left out" || bad "left out: $(val "s.get('updater_failed')")"
+# (the ci's build of main is labelled sha-<commit>, that's no release: none then, a tag's build has its own)
+[ "$(val "s.get('updater_release', 'v0')[1:2].isdigit()")" = True ] && ok "a build of main shows no release" ||
+  bad "its release: $(val "s.get('updater_release')")"
 APP=$(part "$P-app")
 APP2=$(part "$P-app2")
 APP3=$(part "$P-app3")
@@ -921,7 +925,7 @@ rm -f "$WORK/state/reason-f1" "$WORK/state/reason-f2" "$WORK/feed/releases.atom"
 say "the night"
 move om edge o7
 move app 0.0.1 a3n1
-updater_img b2 b200000test label && move updater latest b2
+updater_img b2 b200000test label 9.8.7 && move updater latest b2
 # (its window began a minute ago, the container's clock is utc)
 since=$(($(date +%s) - 60))
 DAY=$(date -u -d "@$since" +%F)
@@ -941,6 +945,8 @@ until_true "s.get('updater', '').startswith('restarting')" 300 && ok "with the m
 mower docked
 until_true "s.get('updater', '').startswith('updated') and 'b200000' in s.get('updater_running', '')" 300 && ok "its new version runs" ||
   bad "itself: $(val "s.get('updater')") $(val "s.get('updater_running')")"
+[ "$(val "s.get('updater_release')")" = v9.8.7 ] && ok "its card shows its release" ||
+  bad "its release: $(val "s.get('updater_release')")"
 until_true "s.get('night_done') == '$DAY' and s.get('result') != 'running'" 420 && ok "the mower back, the night's run" ||
   bad "the night: $(val "s.get('night_done')"), result $(val "s.get('result')")"
 [ "$(log_has 'waiting (night)')" = True ] && ok "it had waited" || bad "its log doesn't say it waited"

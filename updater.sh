@@ -1731,12 +1731,17 @@ tidy() {
   log "tidied up: images ${freed:-0B}, build cache ${cache:-0B}, $(free_mb) MB free"
 }
 
-# itself, for its card: the commit it runs and from when, whether its registry has a newer one
+# itself, for its card: the commit it runs and from when, its release (v and the version in its image's label: none for
+# a build of main), whether its registry has a newer one
 check_self() {
-  local img rev
+  local img rev v
   img=$(image_of "$ME")
   rev=$(rev_of "$img")
   status updater_running "${rev:-?}" "$(day_of "$img")"
+  v=$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' "$img" 2>/dev/null)
+  # form: status updater_release <its tag, v1.2.0>, none for a build of main
+  status updater_release
+  valid "$v" "$VERSION_RE" && status updater_release "v$v"
   if in_compose "$ME"; then
     available updater "$ME" "$(ref_of "$ME")"
     status updater_away

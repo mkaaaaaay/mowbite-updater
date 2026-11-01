@@ -37,6 +37,7 @@ env UPDATER_CONTAINER
 env UPDATER_HOLD_WAIT
 env UPDATER_SELF
 env VERSION
+form status updater_release <its tag, v1.2.0>, none for a build of main
 label mowbite.update.check
 label mowbite.update.gate
 label mowbite.update.log
@@ -115,6 +116,7 @@ status unreachable
 status updater_available
 status updater_away
 status updater_failed
+status updater_release
 status updater_running
 status xtechapp_name
 topic mowbite/hold

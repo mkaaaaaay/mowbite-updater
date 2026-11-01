@@ -504,13 +504,16 @@ const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const nightDays = () => (st.conf.days === 'daily' ? [] : String(st.conf.days).split(',').map(Number).filter((d) => d >= 1 && d <= 7));
 const autoOn = (id) => st.conf[id + '_auto'] === 1;
 
-// what's installed: the version and its day, of a build its commit, of an app with channels the one it follows
+// what's installed: the version and its day, of a build its commit, of an app with channels the one it follows, of the
+// updater its release (its commit for a build of main)
 function installed(p) {
   if (p.kind === 'os') return dim(tr('Comes with OpenMowerOS 3 itself: openmower update-os.'));
   const [what, day] = S(p.id + '_running').split(' ');
   const d = date(day);
   let v;
-  if (p.kind === 'build' || p.kind === 'local' || p.id === 'updater') {
+  if (p.id === 'updater' && S('updater_release')) {
+    v = d ? tr('{v} from {d}', {v: S('updater_release'), d}) : S('updater_release');
+  } else if (p.kind === 'build' || p.kind === 'local' || p.id === 'updater') {
     const c = what && what !== '?' ? what.slice(0, 7) : null;
     v = d && c ? tr('from {d} ({c})', {d, c}) : d ? tr('from {d}', {d}) : c ? tr('commit {c}', {c}) : tr('state unknown');
   } else {

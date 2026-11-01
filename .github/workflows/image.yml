@@ -18,8 +18,33 @@ permissions:
   contents: read
 
 jobs:
-  # built once for amd64 and arm64 and pushed as sha-<commit> only, nothing updates to that
+  # a version tag vX.Y.Z or vX.Y.Z-beta.N, annotated (its message is the release's note), only on a commit of main
+  ref:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - if: github.ref_type == 'tag'
+        run: |
+          if ! printf '%s' "$GITHUB_REF_NAME" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?'; then
+            echo "::error::tag $GITHUB_REF_NAME isn't a version like v1.2.0 or v1.2.0-beta.1"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag $GITHUB_REF_NAME isn't on main, push main first"
+            exit 1
+          fi
+          git fetch -q --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          if [ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" != tag ]; then
+            echo "::error::tag $GITHUB_REF_NAME has no message, the release takes its note from it (git tag -a)"
+            exit 1
+          fi
+
+  # built once for amd64 and arm64 and pushed as sha-<commit> only, nothing updates to that. a tag's version in its
+  # label (org.opencontainers.image.version, the updater's card shows it), on main sha-<commit>
   build:
+    needs: ref
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -41,6 +66,16 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,format=short
+
+      - id: sha
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
           tags: type=sha,format=short
 
       - id: push
@@ -49,11 +84,12 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.sha.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  # only once the checks and the tests of that very image went through, under its names and not built again: the
-  # updaters on the mowers take it from here
+  # only once the checks and the tests of that very image went through, under its names and not built again, and only
+  # for a version tag: latest (the updaters on the mowers take it from there) only for one without a dash, the version
+  # for each. main gets no name besides sha-<commit>
   image:
     needs: [build, check, test, commits]
     runs-on: ubuntu-latest
@@ -74,8 +110,9 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
             type=semver,pattern={{version}}
 
       - env:
@@ -85,6 +122,26 @@ jobs:
           args=()
           while read -r tag; do [ -z "$tag" ] || args+=(-t "$tag"); done <<< "$TAGS"
           [ ${#args[@]} = 0 ] || docker buildx imagetools create "${args[@]}" "$IMAGE"
+
+  # a version tag's release once its image has its names, with the tag's message as its note. a pre-release exactly
+  # for a version with a dash, which /releases/latest never points to
+  release:
+    if: github.ref_type == 'tag'
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          # (the checkout only has the commit, the note is the tag's message)
+          git fetch -q --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          case "$version" in *-*) kind=(--prerelease --latest=false) ;; *) kind=(--latest) ;; esac
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --verify-tag "${kind[@]}" --title "MowBite Updater $version" --notes-from-tag
 
   commits:
     uses: ./.github/workflows/commits.yml
