@@ -110,6 +110,8 @@ const DE = {
   "This version was built on its own, it isn't the official one.": 'Diese Version wurde selbst gebaut, sie ist nicht die offizielle.',
   'Stable is the newest release without "beta". It can be older than the beta that runs now, going there leaves out what came since.':
     'Stabil ist die neueste Version ohne „beta“. Sie kann älter sein als die Beta, die gerade läuft, dann fehlt, was seitdem dazukam.',
+  'Stable is the newest release without "beta", built from its main branch as long as there is none. It can be older than the beta that runs now, going there leaves out what came since.':
+    'Stabil ist die neueste Version ohne „beta“, solange es keine gibt, wird aus dem Hauptzweig gebaut. Sie kann älter sein als die Beta, die gerade läuft, dann fehlt, was seitdem dazukam.',
   'Built from a local copy, it is left as it is.': 'Aus einer lokalen Kopie gebaut, er bleibt, wie er ist.',
   'Updates also with the mower out of the dock.': 'Wird auch aktualisiert, wenn der Mäher nicht im Dock ist.',
   'Something wrong since the last update?': 'Seit dem letzten Update stimmt etwas nicht?',
@@ -504,8 +506,8 @@ const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const nightDays = () => (st.conf.days === 'daily' ? [] : String(st.conf.days).split(',').map(Number).filter((d) => d >= 1 && d <= 7));
 const autoOn = (id) => st.conf[id + '_auto'] === 1;
 
-// what's installed: the version and its day, of a build its commit, of an app with channels the one it follows, of the
-// updater its release (its commit for a build of main)
+// what's installed: the version and its day, of a build its release or else its commit, of an app with channels the one
+// it follows, of the updater its release (its commit for a build of main)
 function installed(p) {
   if (p.kind === 'os') return dim(tr('Comes with OpenMowerOS 3 itself: openmower update-os.'));
   const [what, day] = S(p.id + '_running').split(' ');
@@ -513,6 +515,10 @@ function installed(p) {
   let v;
   if (p.id === 'updater' && S('updater_release')) {
     v = d ? tr('{v} from {d}', {v: S('updater_release'), d}) : S('updater_release');
+  } else if (p.kind === 'build' && S(p.id + '_release')) {
+    const rel = S(p.id + '_release');
+    v = (d ? tr('{v} from {d}', {v: rel, d}) : rel) + (what && what !== '?' ? ' (' + what.slice(0, 7) + ')' : '');
+    if (S(p.id + '_stable') || st.conf[p.id] === 'stable') v += ' · ' + tr(st.conf[p.id] === 'stable' ? 'Stable' : 'Beta');
   } else if (p.kind === 'build' || p.kind === 'local' || p.id === 'updater') {
     const c = what && what !== '?' ? what.slice(0, 7) : null;
     v = d && c ? tr('from {d} ({c})', {d, c}) : d ? tr('from {d}', {d}) : c ? tr('commit {c}', {c}) : tr('state unknown');
@@ -917,7 +923,7 @@ function partCard(p) {
     picker = h('select', {class: 'control', 'data-key': 'chan:' + id, 'aria-label': tr('Version'), value: st.conf.openmower,
       onchange: (e) => (pickedBy(e), setConf({openmower: e.target.value}).then((ok) => ok && ask('check')))},
     ['edge', 'latest', ...new Set(own)].map((t) => h('option', {value: t}, t === 'edge' ? tr('Edge (newest)') : t === 'latest' ? tr('Release') : t)));
-  } else if (p.kind === 'image' && stable) {
+  } else if ((p.kind === 'image' || p.kind === 'build') && stable) {
     picker = h('select', {class: 'control', 'data-key': 'chan:' + id, 'aria-label': tr('Version'), value: st.conf[id],
       onchange: (e) => (pickedBy(e), setConf({[id]: e.target.value}).then((ok) => ok && ask('check')))},
     h('option', {value: 'beta'}, tr('Beta')),
@@ -935,6 +941,8 @@ function partCard(p) {
   const notes = [
     p.kind === 'image' && st.conf[id] === 'stable' && !S(id + '_stable_older') &&
       dim(tr('Stable is the newest release without "beta". It can be older than the beta that runs now, going there leaves out what came since.')),
+    p.kind === 'build' && st.conf[id] === 'stable' &&
+      dim(tr('Stable is the newest release without "beta", built from its main branch as long as there is none. It can be older than the beta that runs now, going there leaves out what came since.')),
     p.kind === 'openmower' && auto && st.conf.openmower === 'edge' &&
       dim(tr("Edge changes often, an update at night can bring a new fault. Only when there's room for the old and the new version at once.")),
   ].filter(Boolean);

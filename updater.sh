@@ -1372,17 +1372,82 @@ back_openmower() {
 
 # --- a container built from github ---
 
-# the newest commit of its branch
-commit_of() {
-  local src v
+# where its branches and releases are read: github, for the planner PLANNER_GITHUB when it's set (a test's)
+github_of() { if [ "$1" = planner ]; then echo "${PLANNER_GITHUB:-https://github.com}"; else echo https://github.com; fi; }
+# its repository's branches and tags: "<commit> <ref>" a line, an annotated tag's commit under <ref>^{}. git's own
+# answer, not github's api (no limit of 60 an hour). 1 without one
+refs_of() {
+  local src r
   src=$(source_of "$(context_of "$(box "$1")")")
-  [ -n "$src" ] || return
-  # shellcheck disable=SC2086
-  set -- $src
-  # (git's own answer, not github's api: no limit of 60 an hour)
-  v=$(wget -q -T 15 -O - "https://github.com/$1.git/info/refs?service=git-upload-pack" 2>/dev/null | tr '\000' ' ' |
-    sed -n "s/^[0-9a-f]\{4\}\([0-9a-f]\{40\}\) refs\/heads\/$(re "${2:-main}")\( .*\)\{0,1\}\$/\1/p" | head -n1)
-  valid "$v" '[0-9a-f]{40}' && echo "$v"
+  [ -n "$src" ] || return 1
+  r=$(wget -q -T 15 -O - "$(github_of "$1")/${src%% *}.git/info/refs?service=git-upload-pack" 2>/dev/null | tr '\000' ' ' |
+    sed -n 's/^[0-9a-f]\{4\}\([0-9a-f]\{40\}\) \(refs\/[^ ]*\).*/\1 \2/p')
+  [ -n "$r" ] && echo "$r"
+}
+# the planner is built from its releases from 0.2.0 on (the ones before were its first tries): on stable the newest
+# without a dash, where /releases/latest sends, on beta the highest version in its feed (the newest ten). "-" when
+# github answered and there's none in its channel: built from its branch then. 1 without an answer: nothing changes
+FIRST_RELEASE=0.2.0
+release_of() {
+  local f x best=
+  [ "$1" = planner ] || { echo -; return 0; }
+  [ "$(channel "$1")" = stable ] && { stable_release_of "$1"; return; }
+  f=$(wget -q -T 15 -O - "$(releases_url "$1").atom" 2>/dev/null) || return 1
+  case $f in *"<feed"*) ;; *) return 1 ;; esac
+  for x in $(printf '%s\n' "$f" | sed -n 's|.*/releases/tag/v\([^"/?#]*\)".*|\1|p'); do
+    valid "$x" "$VERSION_RE" && ! older "$x" $FIRST_RELEASE || continue
+    { [ -z "$best" ] || older "$best" "$x"; } && best=$x
+  done
+  echo "${best:--}"
+}
+releases_url() { echo "$(github_of "$1")/$(source_of "$(context_of "$(box "$1")")" | cut -d' ' -f1)/releases"; }
+# its newest release without a dash from 0.2.0 on, where /releases/latest sends: "-" when that's the list of releases
+# (there's none), 1 without an answer
+stable_release_of() {
+  local l
+  l=$(wget -S --spider -T 15 "$(releases_url "$1")/latest" 2>&1 | sed -n 's/^ *Location: *//p' | tr -d '\r' | head -n1)
+  case $l in
+  */releases/tag/v*)
+    l=${l##*/releases/tag/v}
+    l=${l%%[?#]*}
+    if valid "$l" "$VERSION_RE" && ! older "$l" $FIRST_RELEASE; then echo "$l"; else echo -; fi
+    ;;
+  */releases | */releases/) echo - ;;
+  *) return 1 ;;
+  esac
+}
+# what to build: "<commit> <name> release|branch", its channel's release (its tag) or else its branch. 1 when github
+# didn't answer, then it stays as it is: never its branch for a failed look
+want_of() {
+  local refs rel src c name how=release
+  refs=$(refs_of "$1") || return 1
+  rel=$(release_of "$1") || return 1
+  if [ "$rel" = - ]; then
+    src=$(source_of "$(context_of "$(box "$1")")")
+    name=${src#* }
+    name=${name:-main}
+    how=branch
+    c=$(printf '%s\n' "$refs" | awk -v r="refs/heads/$name" '$2 == r {print $1; exit}')
+  else
+    name=v$rel
+    c=$(printf '%s\n' "$refs" | awk -v r="refs/tags/$name" '$2 == r "^{}" {p = $1} $2 == r {t = $1} END {print p ? p : t}')
+  fi
+  valid "$c" '[0-9a-f]{40}' && echo "$c $name $how"
+}
+# the release a build runs, also only a new name on the commit it runs
+# form: status <part>_release <its tag, v0.2.0>, none for its branch
+release_name() {
+  status "$1_release"
+  [ "$3" != release ] || status "$1_release" "$2"
+}
+# what a build says it went to: a release's tag, else its commit
+said_of() { if [ "$3" = release ]; then echo "$2"; else echo "$1" | cut -c1-7; fi; }
+# its build's context at exactly that commit, for compose besides its stack's files (those stay as they are)
+context_file() {
+  local src f="$STATE/build-$1.yaml"
+  src=$(source_of "$(context_of "$(box "$1")")")
+  printf 'services:\n  %s:\n    build:\n      context: https://github.com/%s.git#%s\n' \
+    "$(service "$(box "$1")")" "${src%% *}" "$2" > "$f" && echo "$f"
 }
 # the commit it was last built from here, while it still runs that image
 built_of() { [ "$(get "$1_image")" = "$(image_of "$(box "$1")")" ] && get "$1_built"; }
@@ -1393,11 +1458,12 @@ base_same() { [ -z "$2" ] || [ "$(get "$1_base_id")" = "$(id_of "$2")" ]; }
 # OpenMower's new version, it's another build), as <part>_failed says it
 build_key() { echo "$1${2:+ $(id_of "$2")}"; }
 
-# built again from its own context and started. never --pull, and only when the image it's built on is here (for the
-# planner: OpenMower's, it has to be built on the one that runs, a missing one would come down whole). one stopped by
-# hand is made anew on it and stays stopped
+# built again from its own context and started, at the commit want_of says ($3, "<commit> <name> release|branch"; on
+# OpenMower's new version without it: what it says now, else the commit it runs). never --pull, and only when the image
+# it's built on is here (for the planner: OpenMower's, it has to be built on the one that runs, a missing one would come
+# down whole). one stopped by hand is made anew on it and stays stopped
 build() {
-  local p="$1" c base commit img before ran back rc built fail stopped=
+  local p="$1" c base commit name how ctx img before ran back rc built fail stopped=
   c=$(box "$p")
   progress "$p" prepare
   base=$(base_of "$c")
@@ -1407,7 +1473,20 @@ build() {
     return 1
   fi
   room_for $ROOM_BUILD || { log "$p: less than $ROOM_BUILD MB free, not built"; outcome "$p" nospace $ROOM_BUILD "$(free_mb)"; return 1; }
-  commit=$(commit_of "$p")
+  # shellcheck disable=SC2046,SC2086
+  set -- "$1" "$2" ${3:-$(want_of "$p")}
+  commit=$3 name=${4:-} how=${5:-}
+  if [ -z "$commit" ] && [ -n "$(built_of "$p")" ]; then
+    commit=$(built_of "$p") name=$(get "${p}_release") how=release
+    [ -n "$name" ] || { name=$(source_of "$(context_of "$c")" | cut -d' ' -f2); name=${name:-main} how=branch; }
+    log "$p: github didn't answer, built again at the commit it runs"
+  fi
+  # (the planner never from its branch for a failed look, that may be older than its release)
+  if [ -z "$commit" ] && [ "$p" = planner ]; then
+    log "$p: github didn't answer and the commit it runs isn't known, not built"
+    outcome "$p" error github
+    return 1
+  fi
   fail=
   [ -n "$commit" ] && fail=$(build_key "$commit" "$base")
   # (also the one after OpenMower's update: the same commit on the same base didn't start before)
@@ -1430,8 +1509,11 @@ build() {
   [ -n "$back" ] || { log "$p: the version before can't be kept, not built"; outcome "$p" error keep; return 1; }
   log "$p: kept the version before as $back, building ($2)"
   : > "$STATE/layers"
-  with_progress "$p" "$(gate "$p")" compose $T_BUILD "$c" --progress json build "$(service "$c")"
+  ctx=
+  [ -n "$commit" ] && ctx=$(context_file "$p" "$commit")
+  with_progress "$p" "$(gate "$p")" compose $T_BUILD "$c" ${ctx:+-f "$ctx"} --progress json build "$(service "$c")"
   rc=$?
+  [ -n "$ctx" ] && rm -f "$ctx"
   [ $rc -eq 0 ] || [ $rc -eq 2 ] || log "$p: the build failed, the one before keeps running"
   # (with MowBite's schedule held: the mower relies on it while it mows)
   if [ $rc -eq 0 ] && [ "$(gate "$p")" = mower ] && ! hold "$p"; then
@@ -1473,29 +1555,41 @@ build() {
   fi
   status "$1_image" "$(image_of "$c")"
   status "$1_built" "$commit"
+  release_name "$p" "$name" "$how"
   [ -n "$base" ] && status "$1_base_id" "$(id_of "$base")"
   status "$1_rebuild"
-  if [ -n "$stopped" ]; then outcome "$p" stopped; else outcome "$p" updated "$(now)" "$(echo "$commit" | cut -c1-7)"; fi
-  [ -n "$commit" ] && status "${p}_available" no main
+  if [ -n "$stopped" ]; then outcome "$p" stopped; else outcome "$p" updated "$(now)" "$(said_of "$commit" "$name" "$how")"; fi
+  [ -n "$commit" ] && status "${p}_available" no "${name:-main}"
   return 0
 }
 
+# form: status <part>_available yes|no|failed|unknown <its release's tag or its branch>, of a build
+# form: status <part>_stable yes|no, also of the planner's build
+# form: status <part> updated <unix s> <a release's tag or the commit>, of a build
 check_build() {
-  local c built want base
+  local c built want base st
   c=$(box "$1")
   built=$(built_of "$1")
   status "$1_running" "${built:-?}" "$(day_of "$(image_of "$c")")"
   status "$1_source" github
-  want=$(commit_of "$1")
+  # (whether there's a stable release to pick, for the planner. without an answer it stays as it was)
+  if [ "$1" = planner ] && st=$(stable_release_of "$1"); then
+    if [ "$st" = - ]; then status "$1_stable" no; else status "$1_stable" yes; fi
+  fi
+  # shellcheck disable=SC2046
+  set -- "$1" $(want_of "$1")
   base=$(base_of "$c")
-  if [ -z "$want" ] || [ -z "$built" ]; then
-    status "$1_available" unknown main
-  elif [ "$want" = "$built" ] && base_same "$1" "$base"; then
-    status "$1_available" no main
-  elif [ "$(build_key "$want" "$base")" = "$(get "$1_failed")" ]; then
-    status "$1_available" failed main
+  if [ -z "${2:-}" ] || [ -z "$built" ]; then
+    want=$(get "$1_release")
+    status "$1_available" unknown "${3:-${want:-main}}"
+  elif [ "$2" = "$built" ] && base_same "$1" "$base"; then
+    # (the same commit, now with a release's name: nothing to build, only the name)
+    release_name "$1" "$3" "$4"
+    status "$1_available" no "$3"
+  elif [ "$(build_key "$2" "$base")" = "$(get "$1_failed")" ]; then
+    status "$1_available" failed "$3"
   else
-    status "$1_available" yes main
+    status "$1_available" yes "$3"
   fi
 }
 
@@ -1503,19 +1597,21 @@ update_build() {
   local want base
   progress "$1" prepare
   running "$(box "$1")" || { log "$1: not running, left as it is"; outcome "$1" stopped; return 0; }
-  want=$(commit_of "$1")
-  [ -n "$want" ] || { outcome "$1" error github; return 1; }
+  want=$(want_of "$1") || { outcome "$1" error github; return 1; }
+  # shellcheck disable=SC2086
+  set -- "$1" $want
   base=$(base_of "$(box "$1")")
-  if [ "$want" = "$(built_of "$1")" ] && base_same "$1" "$base"; then
+  if [ "$2" = "$(built_of "$1")" ] && base_same "$1" "$base"; then
+    release_name "$1" "$3" "$4"
     outcome "$1" current
     return 0
   fi
-  if [ "$(build_key "$want" "$base")" = "$(get "$1_failed")" ]; then
-    log "$1: not again, $(echo "$want" | cut -c1-7) didn't start before"
+  if [ "$(build_key "$2" "$base")" = "$(get "$1_failed")" ]; then
+    log "$1: not again, $(said_of "$2" "$3" "$4") didn't start before"
     outcome "$1" skipped_failed
     return 0
   fi
-  build "$1" "$(echo "$want" | cut -c1-7)"
+  build "$1" "$(said_of "$2" "$3" "$4")" "$want"
 }
 
 # a part built from a copy here: shown, left as it is

@@ -17,6 +17,8 @@ MQTT=${MBT_MQTT_PORT:-51877}
 PAGE=${MBT_PAGE_PORT:-58077}
 FEED=${MBT_FEED_PORT:-58177}
 WORK=${MBT_WORK:-$(mktemp -d "${TMPDIR:-/tmp}/mbt.XXXXXX")}
+# the planner's repository on the made-up github (test/github.py): this one's
+GH=$WORK/feed/gh/mkaaaaaay/mowbite-updater
 STACKS=$WORK/stacks
 STATE=$STACKS/updater/.updater
 OMENV=$STACKS/om/.env
@@ -178,10 +180,45 @@ EOF
 }
 # an image only in the registry, not here: its download has something to hold (gate.py)
 forget() { docker rmi "$REG/$P-$1" > /dev/null 2>&1; }
+# the planner's repository on the made-up github: its branch main and tags (<main> [<tag> <commit>]...: a tag as git
+# tells an annotated one, its own id and its commit under ^{}), its releases' feed (the tags, newest first) and where
+# /releases/latest sends (gh_releases <tags> [-- <latest>], none: to the list of releases). gh_releases off: no answer
+gh_refs() {
+  local l
+  {
+    printf '001e# service=git-upload-pack\n0000'
+    for l in "$1 HEAD" "$1 refs/heads/main"; do printf '%04x%s\n' $((${#l} + 5)) "$l"; done
+    shift
+    while [ $# -ge 2 ]; do
+      for l in "$(printf '%s' "$1" | md5sum | cut -c1-32)00000000 refs/tags/$1" "$2 refs/tags/$1^{}"; do printf '%04x%s\n' $((${#l} + 5)) "$l"; done
+      shift 2
+    done
+    printf '0000'
+  } > "$GH.git/info/refs"
+}
+gh_releases() {
+  local t latest=
+  if [ "${1:-}" = off ]; then
+    rm -f "$GH/releases.atom" "$GH/releases/latest"
+    return
+  fi
+  {
+    echo '<?xml version="1.0" encoding="UTF-8"?>'
+    echo '<feed xmlns="http://www.w3.org/2005/Atom">'
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do
+      printf '<entry><link rel="alternate" type="text/html" href="https://github.com/mkaaaaaay/mowbite-updater/releases/tag/%s"/></entry>\n' "$1"
+      shift
+    done
+    echo '</feed>'
+  } > "$GH/releases.atom"
+  [ "${1:-}" = -- ] && latest=tag/$2
+  echo "$latest" > "$GH/releases/latest"
+}
 # a tag in the registry moved to the image of another, nothing changed here (as on a mower: only the updater pulls)
 move() { docker buildx imagetools create -t "$REG/$P-$1:$2" "$REG/$P-$1:$3" > /dev/null 2>&1; }
 publish() { move app latest "$1"; }
-# the updater built from this checkout (<tag> <revision>), or on top of that build (<tag> <revision> broken|label)
+# the updater built from this checkout (<tag> <revision>), or on top of that build (<tag> <revision> broken|label, and
+# for label a release's version as a fourth)
 updater_img() {
   # (the new version b is the image in MBT_IMAGE when it's set, the one the ci ships, with the test's labels on it)
   if [ -z "${3:-}" ] && { [ -z "${MBT_IMAGE:-}" ] || [ "$1" != b ]; }; then
@@ -221,10 +258,15 @@ docker run -d --name "$P-pub" --label "mbt.run=$P" --network host -v "$WORK/stat
   "while :; do mosquitto_pub -h 127.0.0.1 -p $MQTT -t robot_state/json -f /state/robot_state.json; sleep 1; done" > /dev/null
 sleep 3
 kill -0 "$gate" 2> /dev/null || { bad "no front for the registry (port ${REG#*:} taken?)"; exit 1; }
-# OpenMower's releases on github, as their feed: none until its case writes them
-mkdir -p "$WORK/feed"
-python3 -m http.server --bind 127.0.0.1 --directory "$WORK/feed" "$FEED" > /dev/null 2>&1 &
+# OpenMower's releases on github, as their feed: none until its case writes them. and the planner's github (gh/): its
+# repository's main as on github, no releases until their case
+mkdir -p "$WORK/feed" "$GH.git/info" "$GH/releases"
+python3 "$SRC/test/github.py" "$WORK/feed" "$FEED" > /dev/null 2>&1 &
 feed=$!
+MAIN=$(timeout 60 git ls-remote https://github.com/mkaaaaaay/mowbite-updater.git refs/heads/main | cut -f1)
+[ ${#MAIN} = 40 ] || { bad "no main on github"; exit 1; }
+gh_refs "$MAIN"
+gh_releases
 
 # the version it starts from, and this checkout
 if [ "${MBT_FROM:-}" = checkout ]; then
@@ -285,6 +327,7 @@ services:
       UPDATER_HOLD_WAIT: "2"
       OPENMOWER_CONTAINER: $P-om
       OM_RELEASES: http://127.0.0.1:$FEED/releases.atom
+      PLANNER_GITHUB: http://127.0.0.1:$FEED/gh
       MOWBITE_CONTAINER: $P-mowbite
       PLANNER_CONTAINER: $P-planner
       PRUNE: "0"
@@ -389,6 +432,7 @@ services:
         ARG OPENMOWER_IMAGE
         FROM \$\${OPENMOWER_IMAGE}
         LABEL mbt.run=$P
+        COPY updater.sh /mbt-updater.sh
         CMD ["/start"]
       args:
         OPENMOWER_IMAGE: $REG/$P-om:edge
@@ -1048,6 +1092,53 @@ if docker compose -f "$STACKS/build/compose.yaml" up -d > /dev/null 2>&1; then
 else
   bad "the build stack doesn't come up (github?)"
 fi
+
+say "the planner's releases"
+# (commits of this repository on github: OLD and NEW two before main, NEW's updater.sh differs from main's)
+OLD=e99c27c897eb2094d46771bdb6bdf99913346d6a
+NEW=5295ea58c10c6561263c26c7d3796c744989326f
+mower docked
+ran=$(docker inspect -f '{{.Image}}' "$P-planner")
+[ "$(val "s.get('planner_built')")" = "$MAIN" ] && ok "built from main so far" || bad "built from $(val "s.get('planner_built')")"
+# (a look, and its update by hand: "<what came of it> <what its card says>")
+look() {
+  local t0
+  t0=$(date +%s)
+  post check > /dev/null
+  until_true "int(s.get('checked', 0)) >= $t0 and s.get('result') != 'running'" 120
+  t0=$(date +%s)
+  post now=planner > /dev/null
+  until_true "int(s.get('planner_at', 0)) >= $t0 and s.get('result') != 'running'" 300
+  val "s.get('planner', '').split(' ')[0] + ' ' + s.get('planner_available', '')"
+}
+gh_refs "$MAIN" v0.1.0-beta.7 "$OLD"
+gh_releases v0.1.0-beta.7
+[ "$(look)" = "current no main" ] && runs_on "$P-planner" "$ran" && [ "$(val "s.get('planner_stable')")" = no ] &&
+  [ -z "$(val "s.get('planner_release')")" ] && ok "only its first tries before 0.2.0: main as before" ||
+  bad "first tries: $(val "s.get('planner')") $(val "s.get('planner_available')") stable $(val "s.get('planner_stable')")"
+gh_refs "$OLD" v0.1.0-beta.7 "$OLD"
+gh_releases off
+[ "$(look)" = "error unknown main" ] && runs_on "$P-planner" "$ran" &&
+  ok "github without an answer: nothing built, also with main moved on" ||
+  bad "no answer: $(val "s.get('planner')") $(val "s.get('planner_available')")"
+gh_refs "$OLD" v0.1.0-beta.7 "$OLD" v0.2.0 "$MAIN"
+gh_releases v0.2.0 v0.1.0-beta.7 -- v0.2.0
+[ "$(look)" = "current no v0.2.0" ] && runs_on "$P-planner" "$ran" && [ "$(val "s.get('planner_release')")" = v0.2.0 ] &&
+  [ "$(val "s.get('planner_stable')")" = yes ] && [ "$(val "s.get('planner_built')")" = "$MAIN" ] &&
+  ok "its first release on the commit it runs: only the name, not built again, nor from main, which moved on" ||
+  bad "v0.2.0: $(val "s.get('planner')") $(val "s.get('planner_available')") release $(val "s.get('planner_release')")"
+gh_refs "$OLD" v0.1.0-beta.7 "$OLD" v0.2.0 "$MAIN" v0.3.0-beta.1 "$NEW"
+gh_releases v0.3.0-beta.1 v0.2.0 v0.1.0-beta.7 -- v0.2.0
+[ "$(look)" = "updated no v0.3.0-beta.1" ] && [ "$(val "s.get('planner_built')")" = "$NEW" ] &&
+  [ "$(val "s.get('planner', '').split(' ')[-1]")" = v0.3.0-beta.1 ] && [ "$(val "s.get('planner_release')")" = v0.3.0-beta.1 ] &&
+  ok "on beta its highest release, built" || bad "beta: $(val "s.get('planner')") $(val "s.get('planner_available')") built $(val "s.get('planner_built')")"
+[ "$(docker cp "$P-planner:/mbt-updater.sh" - 2> /dev/null | tar -xO | md5sum | cut -c1-32)" = c81e0ba66d67ec4ff4d79e3d4af603b3 ] &&
+  ok "from exactly its commit" || bad "not built from $NEW"
+post conf 'planner stable' > /dev/null
+[ "$(look)" = "updated no v0.2.0" ] && [ "$(val "s.get('planner_built')")" = "$MAIN" ] &&
+  [ "$(val "s.get('planner_release')")" = v0.2.0 ] && ok "on stable the newest release without a dash" ||
+  bad "stable: $(val "s.get('planner')") $(val "s.get('planner_available')") built $(val "s.get('planner_built')")"
+post conf 'planner beta' > /dev/null
 
 say "itself"
 t0=$(date +%s)

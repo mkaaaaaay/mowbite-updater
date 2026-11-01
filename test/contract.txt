@@ -30,6 +30,7 @@ env MQTT_PREFIX
 env OM_RELEASES
 env OPENMOWER_CONTAINER
 env PLANNER_CONTAINER
+env PLANNER_GITHUB
 env PORT
 env PRUNE
 env STATE_DIR
@@ -37,6 +38,10 @@ env UPDATER_CONTAINER
 env UPDATER_HOLD_WAIT
 env UPDATER_SELF
 env VERSION
+form status <part>_available yes|no|failed|unknown <its release's tag or its branch>, of a build
+form status <part>_release <its tag, v0.2.0>, none for its branch
+form status <part>_stable yes|no, also of the planner's build
+form status <part> updated <unix s> <a release's tag or the commit>, of a build
 form status updater_release <its tag, v1.2.0>, none for a build of main
 label mowbite.update.check
 label mowbite.update.gate
@@ -97,6 +102,7 @@ status <part>_image
 status <part>_name
 status <part>_picked
 status <part>_rebuild
+status <part>_release
 status <part>_running
 status parts
 status <part>_source

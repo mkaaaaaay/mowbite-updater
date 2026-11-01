@@ -17,6 +17,7 @@ else
 fi
 if node --check www/app.js; then ok app.js; else bad app.js; fi
 if python3 -c "import ast; ast.parse(open('test/gate.py').read())"; then ok gate.py; else bad gate.py; fi
+if python3 -c "import ast; ast.parse(open('test/github.py').read())"; then ok github.py; else bad github.py; fi
 
 # the image image.yml makes (named after the repo), the container self.sh and MowBite look for, its page's port
 image=ghcr.io/${GITHUB_REPOSITORY:-mkaaaaaay/mowbite-updater}:latest
