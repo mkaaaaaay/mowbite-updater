@@ -237,7 +237,6 @@ running() { [ "$(docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null)" = runn
 day_of() { docker image inspect -f '{{.Created}}' "$1" 2>/dev/null | cut -c1-10; }
 # the commit an image was built from, as its labels say (ci's images have it), first 7
 rev_of() { docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1" 2>/dev/null | cut -c1-7; }
-digests() { docker image inspect -f '{{join .RepoDigests " "}}' "$1" 2>/dev/null; }
 # the digests the registry knows the image of a container by: its repo digests, and its id (with containerd's image
 # store that is the registry's digest itself, and an image replaced under its tag has no repo digests any more)
 known_as() { printf '%s @%s' "$(digests "$1")" "$1"; }
@@ -271,8 +270,6 @@ built_here() {
 }
 # the registry's digest an image came with from repository $2, empty for one built here
 digest_of() { digests "$1" | tr ' ' '\n' | awk -F@ -v r="$2" '$1 == r {print $2; exit}'; }
-# all the digests it came with from repository $2 (one pushed under more tags has more), in one line
-digests_in() { digests "$1" | tr ' ' '\n' | awk -F@ -v r="$2" '$1 == r {printf "%s%s", s, $2; s = " "}'; }
 # where an image can be had again from repository $2 by its digest: <repo>@<digest>
 prev_of() {
   local d
@@ -453,8 +450,6 @@ stable_tag() {
   v=$(wget -S --spider -T 15 "https://github.com/$src/releases/latest" 2>&1 | sed -n 's|^ *Location: .*/releases/tag/v\{0,1\}\([^[:space:]?]*\).*|\1|p' | tail -n1)
   valid "$v" "$TAG" && echo "$v"
 }
-# the repository of an image reference (its tag or digest off)
-repo_of() { printf '%s' "$1" | sed 's/@.*//; s/:[^:/]*$//'; }
 
 # --- files of the stacks ---
 

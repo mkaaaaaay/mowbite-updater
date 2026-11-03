@@ -40,8 +40,7 @@ done
 
 log "updater: its new version didn't come up, back to the one before"
 # (left out: its id, and each digest its registry knows it by)
-d=$(docker image inspect -f '{{join .RepoDigests " "}}' "$ref" 2>/dev/null | tr ' ' '\n' |
-  awk -F@ -v r="$(printf '%s' "$ref" | sed 's/@.*//; s/:[^:/]*$//')" '$1 == r {printf "%s%s", s, $2; s = " "}')
+d=$(digests_in "$ref" "$(repo_of "$ref")")
 status updater_failed "$new" ${d:+"$d"}
 docker tag "$old" "$ref"
 compose 300 "$ME" up -d --no-deps --pull never "$svc" > /dev/null 2>&1

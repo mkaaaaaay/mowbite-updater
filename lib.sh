@@ -107,6 +107,12 @@ calib_valid() {
   '
 }
 
+# the repository of an image reference (its tag or digest off)
+repo_of() { printf '%s' "$1" | sed 's/@.*//; s/:[^:/]*$//'; }
+digests() { docker image inspect -f '{{join .RepoDigests " "}}' "$1" 2>/dev/null; }
+# all the digests it came with from repository $2 (one pushed under more tags has more), in one line
+digests_in() { digests "$1" | tr ' ' '\n' | awk -F@ -v r="$2" '$1 == r {printf "%s%s", s, $2; s = " "}'; }
+
 # the parts it looks after, as found at the last look (status "parts"): "<id>:<container>:<kind>" each
 #   openmower  OpenMower: its image tag is VERSION in its stack's .env (edge, latest or its own)
 #   image      a container from a registry: its tag pulled again, or the newest release (mowbite.update.stable)
