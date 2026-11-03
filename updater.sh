@@ -2343,7 +2343,7 @@ mkdir -p "$STATE"
 chmod 700 "$STATE"
 # what a stop halfway left of files being written (status, log, settings, the list of what can go): nothing may grow.
 # (a minute old: the helper of its own update may write right now)
-find "$STATE" -maxdepth 1 \( -name 'status.??????' -o -name 'log.??????' -o -name 'conf.??????' -o -name 'room.??????' \) -mmin +1 -exec rm -f {} + 2> /dev/null
+find "$STATE" -maxdepth 1 \( -name 'status.??????' -o -name 'log.??????' -o -name 'conf.??????' -o -name 'room.??????' -o -name 'containers.??????' -o -name 'logs.??????' \) -mmin +1 -exec rm -f {} + 2> /dev/null
 # (for its interface, so it needs no docker to find its folder)
 printf '%s\n' "$STATE" > /tmp/updater-state
 # the broker's user and password for mosquitto_sub and mosquitto_pub, see mqtt. (it takes the rest of the line, spaces too. an empty

@@ -60,7 +60,8 @@ case $what in
 read)
   k=$(keys) || { echo "$k" | tail -n1; exit 1; }
   for p in "$@"; do
-    printf '%s\n' "$k" | awk -v p="$p" '$2 == p && NF == 3 { print p, $3 }'
+    # (a value with spaces in quotes whole, e.g. a password for the redaction of logs)
+    printf '%s\n' "$k" | awk -v p="$p" '$2 == p && NF >= 3 { v = $0; sub(/^[^ ]+ [^ ]+ /, "", v); print p, v }'
   done
   last=$(newest)
   [ -z "$last" ] || echo "backup $last"

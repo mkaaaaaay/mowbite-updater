@@ -1278,6 +1278,7 @@ docker rmi "$P-junk:keep-test" > /dev/null 2>&1
 say "the stacks' containers: a list, a log without access data, a restart"
 mkdir -p "$STACKS/talk"
 cat > "$STACKS/talk/compose.yaml" << EOF
+name: $P-talk
 services:
   talk:
     image: busybox:1.37-musl
@@ -1286,17 +1287,18 @@ services:
       mbt.run: "$P"
     environment:
       API_TOKEN: tok-31337x
-    command: ["sh", "-c", "echo 'token tok-31337x'; echo 'get http://anna:geheim7@caster.example/x'; echo 'password: hunter22'; echo 'all fine'; exec sleep 3600"]
+      SOME_PASS: 'pa\\ss99x'
+    command: ["sh", "-c", "echo 'token tok-31337x'; echo 'get http://anna:geheim7@caster.example/x'; echo 'get http://bob:ge@heim8@caster.example/y'; echo 'password: hunter22'; printf '%s\\n' 'seen pa\\\\ss99x'; echo 'all fine'; exec sleep 3600"]
 EOF
 docker compose -f "$STACKS/talk/compose.yaml" up -d > /dev/null 2>&1 || bad "the stack talk doesn't come up"
 post containers > /dev/null
-until_true "any(c['name'] == '$P-talk' and c['state'] == 'running' and c['stack'] == 'talk' for c in d.get('containers', [])) and any(c['name'] == '$P-updater' and c['self'] for c in d.get('containers', []))" 120 &&
+until_true "any(c['name'] == '$P-talk' and c['state'] == 'running' and c['stack'] == '$P-talk' for c in d.get('containers', [])) and any(c['name'] == '$P-updater' and c['self'] for c in d.get('containers', []))" 120 &&
   ok "the containers of the stacks are listed, itself marked" || bad "not listed: $(val "[c['name'] for c in d.get('containers', [])]")"
 post "logs=$P-talk" > /dev/null
 until_sh 'curl -s -m 10 "$API?logs" | head -n1 | grep -q "^#$P-talk "' 60 || bad "no log of $P-talk"
 logs=$(curl -s -m 10 "$API?logs")
 case $logs in
-*tok-31337x* | *geheim7* | *hunter22*) bad "access data in the log: $(echo "$logs" | tail -n 4 | tr '\n' ' ')" ;;
+*tok-31337x* | *geheim7* | *heim8* | *hunter22* | *ss99x*) bad "access data in the log: $(echo "$logs" | tail -n 4 | tr '\n' ' ')" ;;
 *"all fine"*'***'* | *'***'*"all fine"*) ok "the log without its token, the access in a url and the password" ;;
 *) bad "the log: $(echo "$logs" | tail -n 4 | tr '\n' ' ')" ;;
 esac
