@@ -1458,17 +1458,19 @@ calib() {
   # shellcheck disable=SC2046
   [ "$1" = back ] || status calib_last "$(now)" $(printf '%s\n' "$out" | awk '$1 == "ok" { print $2, $3, $4 }')
   progress openmower restart
+  # (the list and the copy before as they are now, before apps see what came of it)
   if docker restart "$OM" > /dev/null 2>&1 && rehold && seen openmower "$img"; then
+    calib_look
     if [ "$1" = back ]; then status calib back "$(now)"; else status calib written "$(now)"; fi
   else
     log "calibration: OpenMower didn't answer on it, back to the file before"
     [ "$1" = back ] || calib_run back > /dev/null
     docker restart "$OM" > /dev/null 2>&1 && rehold && seen openmower "$img"
+    calib_look
     status calib error "$(now)" not_running
   fi
   status progress
   unhold
-  calib_look
 }
 
 # --- a container built from github ---
