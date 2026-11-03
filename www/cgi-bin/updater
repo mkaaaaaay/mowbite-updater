@@ -9,6 +9,9 @@
 #                       from its registry again)
 #   POST ?self          the updater itself to its newest version within the next minute (with ?now: last)
 #   POST ?check         look within the next minute whether there's something new
+#   POST ?calib         lines "<path> <value>": a calibration written into OpenMower's mower_params.yaml within the next
+#                       minute, idle in the dock (waits up to 30 minutes for it), OpenMower started again on it. only the
+#                       paths and bounds of calib_paths. ?calib=back: the file before the last one back the same way
 #   POST ?room          list what can be deleted to make room
 #   POST ?free=<what>   delete img:<id> (one from that list), all (the whole list) or cache (the build cache)
 # a POST only with Content-Type: application/json (whatever the body), and nothing for other sites' pages to read: a
@@ -74,6 +77,15 @@ POST)
   now) request "now all" ;;
   now=* | back=*) is_part "$p" && request "${QUERY_STRING%%=*} $p" ;;
   check) request check ;;
+  # a calibration's values for OpenMower's mower_params.yaml, lines "<path> <value>" from its list (CALIB), or back to
+  # the file before the last one
+  calib)
+    len=${CONTENT_LENGTH:-0}
+    [ "$len" -gt 0 ] && [ "$len" -le 1000 ] || plain bad
+    pairs=$(head -c "$len" | calib_valid) || plain bad
+    request "calib $pairs"
+    ;;
+  calib=back) request "calib back" ;;
   self) request self ;;
   room) request room ;;
   free=cache | free=all) request "free $p" ;;

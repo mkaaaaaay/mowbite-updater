@@ -64,7 +64,7 @@ mqtt() {
   timeout 10 mosquitto_sub "$@" -t "$t" -R -C 1 -W 6 2> /dev/null
 }
 mower() {
-  local s rc state charging
+  local s rc state charging sub
   s=$(mqtt robot_state/json)
   rc=$?
   # (27: nothing came in time, the broker is there but OpenMower doesn't answer)
@@ -74,6 +74,11 @@ mower() {
   fi
   state=$(printf '%s' "$s" | sed -n 's/.*"current_state": *"\([A-Z_]*\)".*/\1/p')
   charging=$(printf '%s' "$s" | sed -n 's/.*"is_charging": *\([a-z0-9]*\).*/\1/p')
+  # (idle but driven by hand or calibrating on MowBite OS: busy like mowing)
+  sub=$(printf '%s' "$s" | sed -n 's/.*"current_sub_state": *"\([A-Z_]*\)".*/\1/p')
+  if [ "$state" = IDLE ]; then
+    case $sub in DRIVING | CALIBRATING) echo "0 $sub" && return 0 ;; esac
+  fi
   if [ "$state" = IDLE ]; then
     case $charging in 1 | true) echo 1 && return 0 ;; esac
     # a full battery stops charging, the contacts' voltage still says it's in the dock
@@ -154,6 +159,8 @@ EOF
 # the mower's state after HOLD_WAIT. on each of OpenMower's brokers, MowBite is on one of them
 HOLD_FOR=1500
 HOLD_WAIT=${UPDATER_HOLD_WAIT:-10}
+# how long a calibration waits for the mower idle in the dock (s)
+CALIB_WAIT=${UPDATER_CALIB_WAIT:-1800}
 held=
 held_m=
 hold() {
@@ -1373,6 +1380,97 @@ back_openmower() {
   return 1
 }
 
+# --- a calibration: values measured on the mower written into OpenMower's mower_params.yaml ---
+
+# where the file lies, "<what to mount>|<file>": the mount of OpenMower's container at /data/params (a folder, or a
+# volume by its name), else a mower_params.yaml mounted on its own (its folder then). nothing when there's none, or
+# it's read-only
+calib_where() {
+  [ "$(kind openmower)" = openmower ] && exists "$OM" || return 1
+  docker inspect -f '{{range .Mounts}}{{.Type}}|{{if eq .Type "volume"}}{{.Name}}{{else}}{{.Source}}{{end}}|{{.Destination}}|{{.RW}}{{println}}{{end}}' "$OM" 2> /dev/null |
+    awk -F'|' '
+      $4 != "true" { next }
+      $3 == "/data/params" { print $2 "|mower_params.yaml"; found = 1; exit }
+      $1 == "bind" && $3 ~ /\/mower_params\.yaml$/ { d = $2; sub(/\/[^\/]*$/, "", d); f = $2; sub(/.*\//, "", f); one = d "|" f }
+      END { if (!found && one != "") print one }
+    ' | grep .
+}
+# calib.sh in a helper of its own image with that folder alone and no network: what it says
+calib_run() {
+  local w what="$1"
+  shift
+  w=$(calib_where) || return 1
+  docker run --rm --network none --pull never -v "${w%%|*}:/p" --entrypoint sh "$(image_of "$ME")" /calib.sh "$what" "${w#*|}" "$@" 2>&1
+}
+# for apps: calib_paths "<name>:<path>:<unit>:<min>:<max>:<value>" each, only for the paths the file has, and
+# calib_backup <unix> of the newest copy before. neither when the file can't be found or read
+calib_look() {
+  local out
+  # shellcheck disable=SC2046
+  if ! out=$(calib_run read $(printf '%s\n' "$CALIB" | cut -d' ' -f2)); then
+    status calib_paths
+    status calib_backup
+    return 0
+  fi
+  # shellcheck disable=SC2046
+  status calib_paths $(printf '%s\n' "$out" | awk -v list="$CALIB" '
+    BEGIN { n = split(list, l, "\n"); for (i = 1; i <= n; i++) { split(l[i], f, " "); row[f[2]] = f[1] ":" f[2] ":" f[3] ":" f[4] ":" f[5] } }
+    NF == 2 && ($1 in row) { print row[$1] ":" $2 }
+  ')
+  # shellcheck disable=SC2046
+  status calib_backup $(printf '%s\n' "$out" | sed -n 's/^backup .*\.mowbite-\([0-9]*\)$/\1/p')
+}
+# a calibration's pairs "<path> <value>" written (checked against CALIB before), or "back" to the copy before the last
+# one: only idle in the dock with MowBite's schedule held, OpenMower started again on it and seen answering, else the
+# file as it was and OpenMower started on that. not in the dock it waits for it (calib_pending, the newest request,
+# tried each round for CALIB_WAIT)
+calib() {
+  local out img
+  if ! docked; then
+    status calib_pending "$(now)" "$1"
+    status calib waiting "$(now)"
+    log "calibration: waits for the mower idle in the dock"
+    return 2
+  fi
+  status calib_pending
+  img=$(image_of "$OM")
+  hold openmower || { status calib error "$(now)" hold; return 1; }
+  # shellcheck disable=SC2086
+  if [ "$1" = back ]; then out=$(calib_run back); else out=$(calib_run write $1); fi
+  case $out in
+  ok* | back*) ;;
+  *)
+    unhold
+    out=$(printf '%s\n' "$out" | sed -n 's/^refused //p' | head -n1 | tr ' ' '_')
+    status calib refused "$(now)" "${out:-no_params}"
+    log "calibration: nothing written (${out:-no mower_params.yaml found that it can write})"
+    calib_look
+    return 1
+    ;;
+  esac
+  printf '%s\n' "$out" | while read -r w a b c; do
+    case $w in
+    ok) log "calibration: $a $b -> $c in mower_params.yaml" ;;
+    back) log "calibration: mower_params.yaml back to $a" ;;
+    esac
+  done
+  # (what it wrote, old and new, for apps: "<unix> <path> <old> <new> ...")
+  # shellcheck disable=SC2046
+  [ "$1" = back ] || status calib_last "$(now)" $(printf '%s\n' "$out" | awk '$1 == "ok" { print $2, $3, $4 }')
+  progress openmower restart
+  if docker restart "$OM" > /dev/null 2>&1 && rehold && seen openmower "$img"; then
+    if [ "$1" = back ]; then status calib back "$(now)"; else status calib written "$(now)"; fi
+  else
+    log "calibration: OpenMower didn't answer on it, back to the file before"
+    [ "$1" = back ] || calib_run back > /dev/null
+    docker restart "$OM" > /dev/null 2>&1 && rehold && seen openmower "$img"
+    status calib error "$(now)" not_running
+  fi
+  status progress
+  unhold
+  calib_look
+}
+
 # --- a container built from github ---
 
 # where its branches and releases are read: github, for the planner PLANNER_GITHUB when it's set (a test's)
@@ -1987,6 +2085,8 @@ check_all() {
     alive
     check_room
     status disk_free "$(free_mb)"
+    # (what a calibration may write there, for apps)
+    calib_look
     status checked "$(now)"
     looked=$(now)
     half=
@@ -2147,9 +2247,12 @@ while :; do
     parts=""
     check=""
     self=""
+    calib_req=""
     while read -r w a b; do
       case $w in
       check) check=1 ;;
+      # (the newest one: pairs "<path> <value>" checked by the interface, or back)
+      calib) calib_req="$a${b:+ $b}" ;;
       # (all: itself too, last)
       now)
         parts="$parts $a"
@@ -2183,6 +2286,7 @@ while :; do
       esac
     done < "$REQ.$$"
     rm -f "$REQ.$$"
+    [ -z "$calib_req" ] || calib "$calib_req"
     if [ -n "$parts" ]; then
       # shellcheck disable=SC2086
       run request $parts
@@ -2191,6 +2295,17 @@ while :; do
     fi
     [ -n "$self" ] && update_self manual
     status taken
+  fi
+  # a calibration that waits for the dock: tried each round, given up once CALIB_WAIT is over without the dock
+  pending=$(get calib_pending)
+  if [ -n "$pending" ]; then
+    if docked; then
+      calib "${pending#* }"
+    elif [ $(($(now) - ${pending%% *})) -gt "$CALIB_WAIT" ]; then
+      status calib_pending
+      status calib error "$(now)" not_docked
+      log "calibration: nothing written, the mower wasn't idle in the dock in time"
+    fi
   fi
   # a request that came in while it was busy: at once, before the night's run or a look, its wake-up came while
   # nothing slept (one it can't take: next round, as before)

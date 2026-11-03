@@ -10,7 +10,7 @@ ok() { echo "$1 ok"; }
 bad() { echo "$1 FAILED${2:+: $2}"; fail=1; }
 
 if docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:v0.11.0 -s sh -e SC1091,SC3043,SC2034,SC2015,SC2016,SC2153 \
-  /mnt/updater.sh /mnt/lib.sh /mnt/self.sh /mnt/www/cgi-bin/updater /mnt/www/cgi-bin/index.cgi /mnt/test/run.sh /mnt/test/static.sh /mnt/test/contract.sh /mnt/test/release.sh; then
+  /mnt/updater.sh /mnt/lib.sh /mnt/self.sh /mnt/calib.sh /mnt/www/cgi-bin/updater /mnt/www/cgi-bin/index.cgi /mnt/test/run.sh /mnt/test/static.sh /mnt/test/contract.sh /mnt/test/release.sh; then
   ok shellcheck
 else
   bad shellcheck

@@ -325,6 +325,7 @@ services:
       UPDATER_CONTAINER: $P-updater
       UPDATER_SELF: $P-updater-self
       UPDATER_HOLD_WAIT: "2"
+      UPDATER_CALIB_WAIT: "20"
       OPENMOWER_CONTAINER: $P-om
       OM_RELEASES: http://127.0.0.1:$FEED/releases.atom
       PLANNER_GITHUB: http://127.0.0.1:$FEED/gh
@@ -416,10 +417,31 @@ services:
     network_mode: bridge
     volumes:
       - $WORK/state:/state:ro
+      - $WORK/params:/data/params
     labels:
       mbt.run: $P
 EOF
 printf '# made-up OpenMower\nVERSION="v1"\nOM_PLANNER=external\n' > "$OMENV"
+# its mower_params.yaml shaped like OpenMower 2's, with what a calibration may write and what it never may
+mkdir -p "$WORK/params"
+cat > "$WORK/params/mower_params.yaml" << 'PARAMS'
+# made-up mower_params.yaml
+ll:
+  board: "YardForce"
+  services:
+    gps:
+      baud_rate: 921600   # the receiver's
+    diff_drive:
+      wheel_distance_m: 0.3556  # measured on another model
+      ticks_per_m: 2025.0
+  list: [1, 2, 3]
+xbot_positioning:
+  antenna_offset_x: -0.10
+  antenna_offset_y: 0.0
+mower_logic:
+  docking_approach_distance: 1.5
+PARAMS
+chmod 644 "$WORK/params/mower_params.yaml"
 chmod 640 "$OMENV"
 # built on OpenMower's image like the planner, from github, starts with what OpenMower's image has for it
 cat > "$STACKS/planner/compose.yaml" << EOF
@@ -1112,6 +1134,52 @@ if docker compose -f "$STACKS/build/compose.yaml" up -d > /dev/null 2>&1; then
 else
   bad "the build stack doesn't come up (github?)"
 fi
+
+say "a calibration"
+PF="$WORK/params/mower_params.yaml"
+cp -p "$PF" "$WORK/params.orig"
+post check > /dev/null
+until_true "'ticks_per_m:ll/services/diff_drive/ticks_per_m:ticks/m:100:10000:2025.0' in s.get('calib_paths', '') and len(s.get('calib_paths', '').split()) == 4" 120 &&
+  ok "what it may write, with the file's values" || bad "calib_paths: $(val "s.get('calib_paths')")"
+[ "$(post calib "$(printf 'll/services/gps/baud_rate 1\n')")" = bad ] &&
+  [ "$(post calib "$(printf 'll/services/diff_drive/ticks_per_m 99999\n')")" = bad ] &&
+  [ "$(post calib "$(printf 'll/services/diff_drive/ticks_per_m 2030\nll/services/diff_drive/ticks_per_m 2031\n')")" = bad ] &&
+  ok "nothing off its list, out of bounds or twice" || bad "took a path off its list, a value out of bounds or one twice"
+was=$(docker inspect -f '{{.State.StartedAt}}' "$P-om")
+mower out
+[ "$(post calib "$(printf 'll/services/diff_drive/wheel_distance_m 0.3612\nxbot_positioning/antenna_offset_x -0.12\n')")" = ok ] ||
+  bad "the calibration wasn't taken"
+until_true "s.get('calib', '').startswith('waiting')" 60 && cmp -s "$PF" "$WORK/params.orig" && ok "the mower out: it waits, nothing written" ||
+  bad "out: $(val "s.get('calib')")"
+mower docked
+until_true "s.get('calib', '').startswith('written')" 600 && ok "written once the mower is in the dock" || bad "docked: $(val "s.get('calib')")"
+[ "$(diff "$WORK/params.orig" "$PF" | grep -c '^[<>]')" = 4 ] && grep -q '^      wheel_distance_m: 0.3612  # measured on another model$' "$PF" &&
+  grep -q '^  antenna_offset_x: -0.12$' "$PF" && ok "only the two values, the comment kept" || bad "the file: $(diff "$WORK/params.orig" "$PF" | tr '\n' ' ')"
+[ "$(stat -c '%u:%g %a' "$PF")" = "$(stat -c '%u:%g %a' "$WORK/params.orig")" ] && ok "its owner and mode as before" ||
+  bad "owner and mode $(stat -c '%u:%g %a' "$PF")"
+[ "$(docker inspect -f '{{.State.StartedAt}}' "$P-om")" != "$was" ] && ok "OpenMower started again on it" || bad "OpenMower not started again"
+[ -n "$(val "s.get('calib_backup')")" ] && val "s.get('calib_last', '')" | grep -q 'll/services/diff_drive/wheel_distance_m 0.3556 0.3612' &&
+  ok "the copy before and what it wrote, for apps" || bad "backup $(val "s.get('calib_backup')"), last $(val "s.get('calib_last')")"
+[ -z "$(kept mowbite/hold)" ] && ok "MowBite's schedule free again" || bad "the schedule still held: $(kept mowbite/hold)"
+post calib=back > /dev/null
+until_true "s.get('calib', '').startswith('back')" 600 && cmp -s "$PF" "$WORK/params.orig" && ok "back: the file as it was, byte for byte" ||
+  bad "back: $(val "s.get('calib')")"
+# idle but driven by hand (MowBite OS): busy like mowing, given up after its wait
+echo '{"current_state":"IDLE","current_sub_state":"DRIVING","is_charging":false}' > "$WORK/state/robot_state.json"
+sleep 2
+post calib "$(printf 'll/services/diff_drive/ticks_per_m 2030\n')" > /dev/null
+until_true "s.get('calib', '').startswith('waiting') and s.get('mower') == '0 DRIVING'" 60 && ok "driven by hand: busy, it waits" ||
+  bad "driven by hand: $(val "s.get('calib')"), mower $(val "s.get('mower')")"
+until_true "s.get('calib', '').startswith('error') and s.get('calib', '').endswith('not_docked')" 120 && cmp -s "$PF" "$WORK/params.orig" &&
+  ok "given up after its wait, nothing written" || bad "its wait: $(val "s.get('calib')")"
+mower docked
+# a file it can't change safely: left as it is
+printf 'other: &a 1\n' >> "$PF"
+cp -p "$PF" "$WORK/params.anchor"
+post calib "$(printf 'll/services/diff_drive/ticks_per_m 2030\n')" > /dev/null
+until_true "s.get('calib', '').startswith('refused')" 120 && cmp -s "$PF" "$WORK/params.anchor" && ok "an anchor in the file: refused, untouched" ||
+  bad "anchor: $(val "s.get('calib')")"
+cp -p "$WORK/params.orig" "$PF"
 
 say "the planner's releases"
 # (commits of this repository on github: OLD and NEW two before main, NEW's updater.sh differs from main's)

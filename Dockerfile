@@ -27,6 +27,7 @@ COPY --from=tools /httpd.conf /etc/httpd.conf
 COPY lib.sh /lib.sh
 COPY --chmod=755 updater.sh /updater.sh
 COPY --chmod=755 self.sh /self.sh
+COPY --chmod=755 calib.sh /calib.sh
 COPY --from=tools /www /www
 COPY --from=tools /page.html /page.html
 ENTRYPOINT ["/updater.sh"]

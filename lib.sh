@@ -86,6 +86,25 @@ TAG='[A-Za-z0-9][A-Za-z0-9._-]{0,63}'
 VERSION_RE='[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(-[0-9A-Za-z.]{1,32})?'
 ID='[a-z][a-z0-9_]{0,40}'
 
+# what a calibration may write into OpenMower's mower_params.yaml: its name for apps, the path of its keys, the unit
+# and fixed bounds (not relative to the values before: the first calibration may be far off, and anyone on the network
+# can ask). nothing else is ever written
+CALIB='ticks_per_m ll/services/diff_drive/ticks_per_m ticks/m 100 10000
+wheel_distance_m ll/services/diff_drive/wheel_distance_m m 0.15 0.80
+antenna_offset_x xbot_positioning/antenna_offset_x m -0.60 0.60
+antenna_offset_y xbot_positioning/antenna_offset_y m -0.30 0.30'
+# lines "<path> <value>" of a request: each a path of the list, once, and a plain number within its bounds. the pairs on
+# one line, 1 when one isn't like that or there's none
+calib_valid() {
+  awk -v list="$CALIB" '
+    BEGIN { n = split(list, l, "\n"); for (i = 1; i <= n; i++) { split(l[i], f, " "); lo[f[2]] = f[4]; hi[f[2]] = f[5] } }
+    NF == 0 { next }
+    NF != 2 || !($1 in lo) || ($1 in seen) || $2 !~ /^-?[0-9]+(\.[0-9]+)?$/ || $2 + 0 < lo[$1] + 0 || $2 + 0 > hi[$1] + 0 { bad = 1; exit }
+    { seen[$1] = 1; out = out (out == "" ? "" : " ") $1 " " $2 }
+    END { if (bad || out == "") exit 1; print out }
+  '
+}
+
 # the parts it looks after, as found at the last look (status "parts"): "<id>:<container>:<kind>" each
 #   openmower  OpenMower: its image tag is VERSION in its stack's .env (edge, latest or its own)
 #   image      a container from a registry: its tag pulled again, or the newest release (mowbite.update.stable)
