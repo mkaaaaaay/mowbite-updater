@@ -1921,7 +1921,6 @@ look_boxes() {
         print n, $3, $4, started, $6 + 0, ($7 == "" ? "-" : $7)
       }' | sort > "$out"
   mv "$out" "$STATE/containers"
-  status containers_at "$(now)"
 }
 # a container its page may ask about: one of the list, not itself or its helper
 is_box() { [ "$1" != "$ME" ] && [ "$1" != "$SELF" ] && cut -d' ' -f1 "$STATE/containers" 2> /dev/null | grep -qxF -- "$1"; }
@@ -1937,12 +1936,14 @@ secrets() {
 # a log as it may be shown: the given values out, the access in a url (user:password@) and what follows password,
 # token, secret or an api key with : or =, each as ***
 redact() {
-  awk -v secrets="$1" '
+  # (through the environment: awk -v would read a backslash in one as an escape)
+  SECRETS="$1" awk '
     function ci(w,   r, i, c, u, l) { r = ""; for (i = 1; i <= length(w); i++) { c = substr(w, i, 1); u = toupper(c); l = tolower(c); r = r (u != l ? "[" u l "]" : c) } return r }
     function lit(line, x,   out, p) { out = ""; while ((p = index(line, x)) > 0) { out = out substr(line, 1, p - 1) "***"; line = substr(line, p + length(x)) } return out line }
     BEGIN {
-      n = split(secrets, s, "\n")
-      url = "://[^/@ :\"\047]+:[^@ /\"\047]*@"
+      n = split(ENVIRON["SECRETS"], s, "\n")
+      # (up to the last @ before the host: a password can hold one)
+      url = "://[^/@ :\"\047]+:[^ /\"\047]*@"
       kv = "(" ci("password") "|" ci("passwd") "|" ci("pwd") "|" ci("secret") "|" ci("token") "|" ci("api_key") "|" ci("apikey") ")[\"\047]?[ \t]*[:=][ \t]*[\"\047]?"
       val = "^[^\"\047 ,;}&]+"
     }

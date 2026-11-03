@@ -80,8 +80,10 @@ setting at
 setting days
 setting openmower
 setting picked
+status <part>
 status <part>_at
 status <part>_available
+status <part>_back
 status <part>_base_id
 status <part>_beta
 status <part>_built
@@ -106,7 +108,6 @@ status candidates
 status changed_<part>
 status checked
 status clock
-status containers_at
 status disk_free
 status embed
 status looking
