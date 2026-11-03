@@ -3,9 +3,11 @@ answer bytes
 answer cache
 answer conf
 answer container
+answer containers
 answer days
 answer gate
 answer id
+answer image
 answer items
 answer kind
 answer log
@@ -14,7 +16,12 @@ answer parts
 answer picked
 answer refs
 answer requested
+answer restarts
 answer room
+answer self
+answer stack
+answer started
+answer state
 answer status
 compose container mowbite-updater
 compose image ghcr.io/mkaaaaaay/mowbite-updater:latest
@@ -25,6 +32,7 @@ compose volume /opt/stacks
 compose volume /var/run/docker.sock
 env MOWBITE_CONTAINER
 env MQTT_HOST
+env MQTT_PASSWORD
 env MQTT_PORT
 env MQTT_PREFIX
 env OM_RELEASES
@@ -58,8 +66,10 @@ request calib
 request calib=back
 request check
 request conf
+request containers
 request free=cache | free=all
 request free=img:*
+request logs=* | restart=*
 request now
 request now=* | back=*
 request room
@@ -96,6 +106,7 @@ status candidates
 status changed_<part>
 status checked
 status clock
+status containers_at
 status disk_free
 status embed
 status looking
@@ -122,6 +133,7 @@ status pending_openmower
 status planner_name
 status progress
 status reach
+status restarted
 status result
 status run_parts
 status self_night

@@ -13,7 +13,12 @@
 #                       minute, idle in the dock (waits up to 30 minutes for it), OpenMower started again on it. only the
 #                       paths and bounds of calib_paths. ?calib=back: the file before the last one back the same way
 #   POST ?room          list what can be deleted to make room
-#   POST ?free=<what>   delete img:<id> (one from that list), all (the whole list) or cache (the build cache)
+#   POST ?free=<what>   delete img:<id> (one from that list), all but the ways back or cache (the build cache)
+#   POST ?containers    list the containers of the stacks (in the GET's containers)
+#   POST ?logs=<name>   a container's last log lines with passwords and access out, for GET ?logs
+#   POST ?restart=<name> a container of the list started again within the next minute: while OpenMower doesn't drive the
+#                       mower, OpenMower itself idle in the dock. not the updater
+#   GET ?logs           the log asked for last: "#<name> <unix>", then its lines
 # a POST only with Content-Type: application/json (whatever the body), and nothing for other sites' pages to read: a
 # page in some browser in the network can't change anything here directly, its own page and programs can. MowBite passes
 # on what its own scripts take (its page, the app, pages of the home network), by its rules. it runs as root next to
@@ -88,6 +93,12 @@ POST)
   calib=back) request "calib back" ;;
   self) request self ;;
   room) request room ;;
+  containers) request containers ;;
+  logs=* | restart=*)
+    # (only a container of the list, not itself)
+    valid "$p" '[A-Za-z0-9][A-Za-z0-9_.-]{0,63}' && [ "$p" != "$ME" ] && [ "$p" != "$SELF" ] &&
+      cut -d' ' -f1 "$STATE/containers" 2> /dev/null | grep -qxF -- "$p" && request "${QUERY_STRING%%=*} $p"
+    ;;
   free=cache | free=all) request "free $p" ;;
   free=img:*)
     id=${p#img:}
@@ -97,6 +108,11 @@ POST)
   plain bad
   ;;
 GET)
+  if [ "$QUERY_STRING" = logs ]; then
+    printf 'Content-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'
+    cat "$STATE/logs" 2> /dev/null
+    exit 0
+  fi
   printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
   # the settings: each part's channel and whether it updates by itself, when
   printf '{"conf":{"at":"%s","days":"%s","picked":"%s"' "$(conf at 03:00 | jstr)" "$(conf days daily | jstr)" "$(conf picked none | jstr)"
@@ -117,7 +133,10 @@ GET)
   jstr < "$STATUS" 2> /dev/null | awk '{k = $1; sub(/^[^ ]* ?/, ""); printf "%s\"%s\":\"%s\"", (NR > 1 ? "," : ""), k, $0}'
   printf '},"room":{"items":['
   grep '^img ' "$STATE/room" 2> /dev/null | jstr | awk '$3 ~ /^[0-9]+$/ {printf "%s{\"id\":\"%s\",\"bytes\":%s,\"refs\":\"%s\",\"kind\":\"%s\"}", (n++ ? "," : ""), $2, $3, $4, $5}'
-  printf '],"cache":%s},"log":[' "$(sed -n 's/^cache //p' "$STATE/room" 2> /dev/null | grep -x '[0-9][0-9]*' || echo 0)"
+  printf '],"cache":%s},"containers":[' "$(sed -n 's/^cache //p' "$STATE/room" 2> /dev/null | grep -x '[0-9][0-9]*' || echo 0)"
+  # (the stacks' containers as it looked last: name, stack, state, since when it runs, restarts, image)
+  jstr < "$STATE/containers" 2> /dev/null | awk -v me="$ME" 'NF >= 6 {printf "%s{\"name\":\"%s\",\"stack\":\"%s\",\"state\":\"%s\",\"started\":\"%s\",\"restarts\":%s,\"image\":\"%s\",\"self\":%s}", (n++ ? "," : ""), $1, $2, $3, $4, $5 + 0, $6, ($1 == me ? "true" : "false")}'
+  printf '],"log":['
   tail -n 200 "$LOG" 2> /dev/null | jstr | awk '{printf "%s\"%s\"", (NR > 1 ? "," : ""), $0}'
   printf ']}\n'
   ;;

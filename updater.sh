@@ -36,8 +36,6 @@ T_REGISTRY=60
 T_PULL=1800
 T_UP=300
 T_BUILD=900
-# the helper of its own update (a test next to a real updater on the same docker: another name)
-SELF=${UPDATER_SELF:-mowbite-updater-self}
 
 alive() { status alive "$(now)"; }
 # what came of a part, for its card, and when (<part>_at)
@@ -1889,6 +1887,112 @@ room_free() {
   log "room: $(($(free_mb) - before)) MB more free, $(free_mb) MB free"
 }
 
+# --- the stacks' containers, like a small dockge: their list, a log, a restart ---
+
+# the containers of the stacks (the compose projects in the folder its own stack is in), for its page: "<name> <stack>
+# <state> <started> <restarts> <image>" a line (started as docker says it, - when it never ran)
+look_boxes() {
+  local root out
+  root=$(stacks_root)
+  out=$(mktemp "$STATE/containers.XXXXXX") || return 0
+  # shellcheck disable=SC2046
+  docker inspect -f '{{.Name}}|{{index .Config.Labels "com.docker.compose.project.working_dir"}}|{{index .Config.Labels "com.docker.compose.project"}}|{{.State.Status}}|{{.State.StartedAt}}|{{.RestartCount}}|{{.Config.Image}}' $(docker ps -aq) 2> /dev/null |
+    awk -F'|' -v root="$root/" '
+      index($2, root) == 1 && $3 != "" {
+        n = $1; sub(/^\//, "", n)
+        started = $5 ~ /^0001-/ ? "-" : $5
+        print n, $3, $4, started, $6 + 0, ($7 == "" ? "-" : $7)
+      }' | sort > "$out"
+  mv "$out" "$STATE/containers"
+  status containers_at "$(now)"
+}
+# a container its page may ask about: one of the list, not itself or its helper
+is_box() { [ "$1" != "$ME" ] && [ "$1" != "$SELF" ] && cut -d' ' -f1 "$STATE/containers" 2> /dev/null | grep -qxF -- "$1"; }
+# what a log mustn't show of a container: the values of its settings that look like access (passwords, tokens, keys,
+# users), its own mqtt password, and OpenMower's ntrip access from mower_params.yaml. a value a line, only kept in memory
+secrets() {
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" 2> /dev/null |
+    awk -F= 'toupper($1) ~ /PASS|SECRET|TOKEN|KEY|AUTH|USER|NTRIP|CRED/ { sub(/^[^=]*=/, ""); if (length($0) >= 3) print }'
+  [ -n "${MQTT_PASSWORD:-}" ] && printf '%s\n' "$MQTT_PASSWORD"
+  [ "$1" = "$OM" ] && calib_run read ntrip_client/username ntrip_client/password ntrip_client/user 2> /dev/null |
+    awk '$1 ~ /^ntrip_client\// { sub(/^[^ ]* /, ""); gsub(/^["\047]|["\047]$/, ""); if (length($0) >= 3) print }'
+}
+# a log as it may be shown: the given values out, the access in a url (user:password@) and what follows password,
+# token, secret or an api key with : or =, each as ***
+redact() {
+  awk -v secrets="$1" '
+    function ci(w,   r, i, c, u, l) { r = ""; for (i = 1; i <= length(w); i++) { c = substr(w, i, 1); u = toupper(c); l = tolower(c); r = r (u != l ? "[" u l "]" : c) } return r }
+    function lit(line, x,   out, p) { out = ""; while ((p = index(line, x)) > 0) { out = out substr(line, 1, p - 1) "***"; line = substr(line, p + length(x)) } return out line }
+    BEGIN {
+      n = split(secrets, s, "\n")
+      url = "://[^/@ :\"\047]+:[^@ /\"\047]*@"
+      kv = "(" ci("password") "|" ci("passwd") "|" ci("pwd") "|" ci("secret") "|" ci("token") "|" ci("api_key") "|" ci("apikey") ")[\"\047]?[ \t]*[:=][ \t]*[\"\047]?"
+      val = "^[^\"\047 ,;}&]+"
+    }
+    {
+      line = substr($0, 1, 1000)
+      for (i = 1; i <= n; i++) if (length(s[i]) >= 3) line = lit(line, s[i])
+      out = ""
+      while (match(line, url)) { out = out substr(line, 1, RSTART + 2) "***:***@"; line = substr(line, RSTART + RLENGTH) }
+      line = out line
+      out = ""
+      while (match(line, kv)) {
+        head = substr(line, 1, RSTART + RLENGTH - 1)
+        q = substr(head, length(head), 1)
+        out = out head
+        line = substr(line, RSTART + RLENGTH)
+        # (in quotes: up to the closing one, spaces too)
+        if (q == "\"" || q == "\047") { if (match(line, "^[^" q "]*")) line = "***" substr(line, RLENGTH + 1) }
+        else if (match(line, val)) line = "***" substr(line, RLENGTH + 1)
+      }
+      print out line
+    }'
+}
+# a container's last log lines for its page, with the secrets out: "#<name> <unix>" and then the lines, oldest first
+box_logs() {
+  local out
+  is_box "$1" || return 0
+  out=$(mktemp "$STATE/logs.XXXXXX") || return 0
+  { echo "#$1 $(now)"; docker logs --tail 300 --timestamps "$1" 2>&1 | redact "$(secrets "$1")"; } > "$out"
+  mv "$out" "$STATE/logs"
+}
+# a container of the stacks started again, asked for on its page: only while OpenMower doesn't drive the mower, OpenMower
+# itself only idle in the dock with MowBite's schedule held and seen answering after. status restarted "<name> <done|
+# refused|error> <unix> [why]"
+restart_box() {
+  local img
+  is_box "$1" || return 0
+  if [ "$1" = "$OM" ]; then
+    if ! docked; then
+      status restarted "$1" refused "$(now)" not_docked
+      log "$1: not started again, the mower isn't idle in the dock"
+      return 0
+    fi
+    img=$(image_of "$OM")
+    hold openmower || { status restarted "$1" error "$(now)" hold; return 0; }
+    progress openmower restart
+    if docker restart "$OM" > /dev/null 2>&1 && rehold && seen openmower "$img"; then
+      status restarted "$1" "done" "$(now)"
+      log "$1: started again, asked for on its page"
+    else
+      status restarted "$1" error "$(now)" not_running
+      log "$1: started again, but it didn't answer"
+    fi
+    status progress
+    unhold
+  elif ! quiet; then
+    status restarted "$1" refused "$(now)" busy
+    log "$1: not started again, OpenMower drives the mower"
+  elif docker restart "$1" > /dev/null 2>&1; then
+    status restarted "$1" "done" "$(now)"
+    log "$1: started again, asked for on its page"
+  else
+    status restarted "$1" error "$(now)" failed
+    log "$1: couldn't be started again"
+  fi
+  look_boxes
+}
+
 # --- leftovers ---
 
 # its own older rollback tags: of each part the newest few on other images than the one that runs (an app's: two, the
@@ -2291,6 +2395,9 @@ while :; do
         esac
         ;;
       room) check_room ;;
+      containers) look_boxes ;;
+      logs) box_logs "$a" ;;
+      restart) restart_box "$a" ;;
       free) room_free "$a" "$b" ;;
       esac
     done < "$REQ.$$"

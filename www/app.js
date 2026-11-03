@@ -229,6 +229,31 @@ const DE = {
   'Clear': 'Leeren',
   'Really delete?': 'Wirklich löschen?',
   'Delete all but the ways back ({size})': 'Alles außer Rückwegen löschen ({size})',
+  'Containers': 'Container',
+  '{n} running': '{n} laufen',
+  "The stacks' containers, like in Dockge: the last lines of their log and a restart. Passwords, tokens and access data stay hidden in the log.":
+    'Die Container der Stacks, wie in Dockge: die letzten Zeilen ihres Logs und ein Neustart. Passwörter, Tokens und Zugangsdaten bleiben im Log verborgen.',
+  "A restart only while OpenMower doesn't drive the mower, OpenMower itself only idle in the dock.":
+    'Neu starten nur, solange OpenMower den Mäher nicht fährt, OpenMower selbst nur, wenn er ruhig im Dock steht.',
+  'runs since {t}': 'läuft seit {t}',
+  'stopped': 'gestoppt',
+  'restarting': 'startet neu',
+  '{n} restarts by itself': '{n} Neustarts von selbst',
+  'Log': 'Log',
+  'Hide the log': 'Log ausblenden',
+  'Restart': 'Neu starten',
+  'Really restart?': 'Wirklich neu starten?',
+  'restarts itself with its updates': 'startet bei seinen Updates selbst neu',
+  'Getting the log…': 'Holt das Log…',
+  'Restarting…': 'Startet neu…',
+  'Looking at the containers…': 'Sieht nach den Containern…',
+  'Look at the containers': 'Container ansehen',
+  'Started again, {t}.': 'Neu gestartet, {t}.',
+  "Not started again: the mower isn't idle in the dock.": 'Nicht neu gestartet: Der Mäher steht nicht ruhig im Dock.',
+  'Not started again: OpenMower drives the mower.': 'Nicht neu gestartet: OpenMower fährt den Mäher gerade.',
+  'Started again, but it does not answer.': 'Neu gestartet, antwortet aber nicht.',
+  "Couldn't be started again.": 'Konnte nicht neu gestartet werden.',
+  'Newest at the bottom': 'Neueste unten',
   'Add another app': 'Weitere App aufnehmen',
   'Update other apps on the mower too': 'Andere Apps auf dem Mäher mit aktualisieren',
   'Any other app of your stacks, the updater then looks after it like the others: only with the mower ready in the dock, and back to the version before when the new one doesn\'t run for half a minute.':
@@ -380,6 +405,7 @@ function whereOf(query) {
   if ((k === 'now' || k === 'back') && v) return v;
   if (k === 'self') return 'updater';
   if (k === 'room' || k === 'free') return 'room';
+  if (k === 'containers' || k === 'logs' || k === 'restart') return 'containers';
   return 'overview';
 }
 function ask(query, body) {
@@ -1258,6 +1284,78 @@ function roomFold() {
   );
 }
 
+// the stacks' containers, like a small dockge: their state, the last lines of a log (asked for, the updater takes the
+// passwords out) and a restart (by the updater, with its rules)
+let shownLog = null;
+let logWait = null;
+function getLog(name) {
+  const at = Date.now() / 1000;
+  shownLog = {name, text: null};
+  ask('logs=' + name);
+  clearInterval(logWait);
+  logWait = setInterval(async () => {
+    try {
+      const text = await (await fetch(API + '?logs', {cache: 'no-store', signal: AbortSignal.timeout(8000)})).text();
+      const [head, ...rest] = text.split('\n');
+      const m = /^#(\S+) (\d+)$/.exec(head);
+      if (!m || m[1] !== name || Number(m[2]) < at - 2) return;
+      clearInterval(logWait);
+      if (shownLog && shownLog.name === name) shownLog = {name, text: rest.join('\n').trim()};
+      render();
+    } catch {}
+  }, 1500);
+  setTimeout(() => clearInterval(logWait), 60000);
+}
+function restartLine(name) {
+  const [who, what, t, why] = S('restarted').split(' ');
+  if (who !== name) return null;
+  if (what === 'done') return dim(tr('Started again, {t}.', {t: when(t)}));
+  if (what === 'refused') return h('p', {class: 'warn'}, tr(why === 'not_docked' ? "Not started again: the mower isn't idle in the dock." : 'Not started again: OpenMower drives the mower.'));
+  if (what === 'error') return h('p', {class: 'warn'}, tr(why === 'not_running' ? 'Started again, but it does not answer.' : "Couldn't be started again."));
+  return null;
+}
+function containerFold() {
+  const items = st.containers || [];
+  const looked = askedSince('containers');
+  const up = items.filter((c) => c.state === 'running').length;
+  const since = (c) => {
+    const t = Date.parse(c.started);
+    return Number.isFinite(t) ? when(Math.round(t / 1000)) : '?';
+  };
+  return fold('containers', looked !== null, false, tr('Containers'), items.length ? tr('{n} running', {n: up}) : null,
+    dim(tr("The stacks' containers, like in Dockge: the last lines of their log and a restart. Passwords, tokens and access data stay hidden in the log.")),
+    dim(tr("A restart only while OpenMower doesn't drive the mower, OpenMower itself only idle in the dock.")),
+    items.map((c) => {
+      const restarting = askedSince('restart:' + c.name) !== null;
+      const logging = askedSince('logs:' + c.name) !== null || (shownLog && shownLog.name === c.name && shownLog.text === null);
+      const open = shownLog && shownLog.name === c.name;
+      return h('div', {class: 'item'},
+        h('span', {class: 'itemName', title: c.image}, c.name),
+        dim([c.stack, c.state === 'running' ? tr('runs since {t}', {t: since(c)}) : tr(c.state === 'restarting' ? 'restarting' : 'stopped'),
+          c.restarts > 0 && tr('{n} restarts by itself', {n: c.restarts})].filter(Boolean).join(' · ')),
+        restartLine(c.name),
+        h('div', {class: 'row'},
+          h('button', {class: 'control', 'data-key': 'log:' + c.name, disabled: busy(), onclick: () => {
+            if (open && shownLog.text !== null) {
+              shownLog = null;
+              render();
+            } else getLog(c.name);
+          }}, open && shownLog.text !== null ? tr('Hide the log') : tr('Log')),
+          c.self ? dim(tr('restarts itself with its updates')) : twoTaps('restart:' + c.name, tr('Restart'), tr('Really restart?'), () => ask('restart=' + c.name))),
+        restarting && dim(tr('Restarting…')),
+        logging && dim(tr('Getting the log…')),
+        open && shownLog.text !== null && h('div', {class: 'act'}, copyButton('copy:' + c.name, shownLog.text)),
+        open && shownLog.text !== null && h('pre', {class: 'log boxlog'}, shownLog.text || '–'),
+        open && shownLog.text !== null && dim(tr('Newest at the bottom')));
+    }),
+    looked !== null && dim(tr('Looking at the containers…')),
+    failedHere('containers'),
+    h('div', {class: 'row'},
+      h('button', {class: 'control', 'data-key': 'containers', disabled: busy(), onclick: () => ask('containers')}, tr(items.length ? 'Look again' : 'Look at the containers')),
+      h('span')),
+  );
+}
+
 function logFold() {
   const log = [...(st.log || [])].reverse().join('\n');
   if (!log) return null;
@@ -1293,6 +1391,9 @@ function render() {
   const key = active && app.contains(active) ? active.getAttribute('data-key') : null;
   const pre = app.querySelector('pre.runlog');
   const scroll = pre ? pre.scrollTop : 0;
+  // a container's log: at its end (the newest) unless scrolled up in it
+  const box = app.querySelector('pre.boxlog');
+  const boxAt = box && box.scrollTop + box.clientHeight < box.scrollHeight - 4 ? box.scrollTop : -1;
   const parts = PARTS().map((p, i) => ({p, i})).sort((a, b) => rank(a.p) - rank(b.p) || a.i - b.i).map((x) => x.p);
   const others = parts.filter((p) => rank(p) === 3);
   // (what isn't there this time, false or null, isn't shown)
@@ -1308,11 +1409,14 @@ function render() {
     PARTS().some((p) => autoOn(p.id)) && scheduleCard(),
     h('p', {class: 'dim foot'}, tr("If a new version doesn't start, it goes back to the one before. Afterwards it clears away old versions.")),
     roomFold(),
+    containerFold(),
     addFold(),
     logFold(),
   ].filter(Boolean));
   const log = app.querySelector('pre.runlog');
   if (log) log.scrollTop = scroll;
+  const boxLog = app.querySelector('pre.boxlog');
+  if (boxLog) boxLog.scrollTop = boxAt < 0 ? boxLog.scrollHeight : boxAt;
   const again = key && app.querySelector('[data-key="' + CSS.escape(key) + '"]');
   if (again) again.focus({preventScroll: true});
   say();

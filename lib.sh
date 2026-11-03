@@ -16,6 +16,8 @@ exists() { docker inspect "$1" > /dev/null 2>&1; }
 # itself: by its name in compose.yaml, else by its id as its own mounts show it (on the host's network its hostname is the
 # host's)
 ME=${UPDATER_CONTAINER:-mowbite-updater}
+# the helper of its own update (a test next to a real updater on the same docker: another name)
+SELF=${UPDATER_SELF:-mowbite-updater-self}
 # (its interface, asked every few seconds while its page is open, takes the folder it noted at its start: no docker)
 if [ -n "$REQUEST_METHOD" ] && [ -z "$STATE_DIR" ] && [ -s /tmp/updater-state ]; then
   read -r STATE < /tmp/updater-state

@@ -1275,6 +1275,46 @@ until_true "not d.get('requested') and not s.get('taken')" 60
 [ -n "$before" ] && [ "$(ways_back)" = "$before" ] && ok "the ways back stay" || bad "ways back before: $(echo "$before" | tr '\n' ' '), after: $(ways_back | tr '\n' ' ')"
 docker rmi "$P-junk:keep-test" > /dev/null 2>&1
 
+say "the stacks' containers: a list, a log without access data, a restart"
+mkdir -p "$STACKS/talk"
+cat > "$STACKS/talk/compose.yaml" << EOF
+services:
+  talk:
+    image: busybox:1.37-musl
+    container_name: $P-talk
+    labels:
+      mbt.run: "$P"
+    environment:
+      API_TOKEN: tok-31337x
+    command: ["sh", "-c", "echo 'token tok-31337x'; echo 'get http://anna:geheim7@caster.example/x'; echo 'password: hunter22'; echo 'all fine'; exec sleep 3600"]
+EOF
+docker compose -f "$STACKS/talk/compose.yaml" up -d > /dev/null 2>&1 || bad "the stack talk doesn't come up"
+post containers > /dev/null
+until_true "any(c['name'] == '$P-talk' and c['state'] == 'running' and c['stack'] == 'talk' for c in d.get('containers', [])) and any(c['name'] == '$P-updater' and c['self'] for c in d.get('containers', []))" 120 &&
+  ok "the containers of the stacks are listed, itself marked" || bad "not listed: $(val "[c['name'] for c in d.get('containers', [])]")"
+post "logs=$P-talk" > /dev/null
+until_sh 'curl -s -m 10 "$API?logs" | head -n1 | grep -q "^#$P-talk "' 60 || bad "no log of $P-talk"
+logs=$(curl -s -m 10 "$API?logs")
+case $logs in
+*tok-31337x* | *geheim7* | *hunter22*) bad "access data in the log: $(echo "$logs" | tail -n 4 | tr '\n' ' ')" ;;
+*"all fine"*'***'* | *'***'*"all fine"*) ok "the log without its token, the access in a url and the password" ;;
+*) bad "the log: $(echo "$logs" | tail -n 4 | tr '\n' ' ')" ;;
+esac
+[ "$(post "logs=$P-updater")" = bad ] && [ "$(post "restart=$P-updater")" = bad ] && [ "$(post restart=nobody)" = bad ] &&
+  ok "not itself, only containers of the list" || bad "itself or one not listed taken"
+before=$(docker inspect -f '{{.State.StartedAt}}' "$P-talk")
+mower out
+post "restart=$P-talk" > /dev/null
+until_true "s.get('restarted', '').startswith('$P-talk refused')" 60 && [ "$(docker inspect -f '{{.State.StartedAt}}' "$P-talk")" = "$before" ] &&
+  ok "not restarted while OpenMower drives the mower" || bad "restart while mowing: $(val "s.get('restarted')")"
+post "restart=$P-om" > /dev/null
+until_true "s.get('restarted', '').startswith('$P-om refused') and s.get('restarted', '').endswith('not_docked')" 60 &&
+  ok "OpenMower not restarted out of the dock" || bad "OpenMower out of the dock: $(val "s.get('restarted')")"
+mower docked
+post "restart=$P-talk" > /dev/null
+until_true "s.get('restarted', '').startswith('$P-talk done')" 60 && [ "$(docker inspect -f '{{.State.StartedAt}}' "$P-talk")" != "$before" ] &&
+  ok "restarted when asked" || bad "not restarted: $(val "s.get('restarted')")"
+
 say "done"
 finished=1
 if [ $fails -eq 0 ]; then echo "all passed"; else echo "$fails failed"; fi
