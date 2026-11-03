@@ -239,7 +239,8 @@ const DE = {
   'stopped': 'gestoppt',
   'restarting': 'startet neu',
   '{n} restarts by itself': '{n} Neustarts von selbst',
-  'Log': 'Log',
+  'Show the log': 'Log anzeigen',
+  'The updater runs without a compose file: it forgets its settings and can\'t update itself. Start it from a stack, e.g. in Dockge or Portainer.': 'Der Updater läuft ohne Compose-Datei: Er vergisst seine Einstellungen und kann sich nicht selbst aktualisieren. Starte ihn aus einem Stack, z. B. in Dockge oder Portainer.',
   'Hide the log': 'Log ausblenden',
   'Restart': 'Neu starten',
   'Really restart?': 'Wirklich neu starten?',
@@ -1070,6 +1071,7 @@ function awayCard() {
   };
   return h('div', {class: 'card'},
     h('span', {class: 'name'}, tr('Out of reach for the updater')),
+    self === '-' && dim(tr('The updater runs without a compose file: it forgets its settings and can\'t update itself. Start it from a stack, e.g. in Dockge or Portainer.')),
     self && self !== '-' && [dim(tr('The updater doesn\'t see its own folder {dir}: it forgets its settings and can\'t update itself. Add this line to its "volumes:":', {dir: self})), line(self)],
     far.map((f) => f.dir === '-'
       ? dim(tr('"{name}" runs without a compose file, the updater can\'t update it.', {name: f.name}))
@@ -1224,7 +1226,6 @@ function overview() {
 const ROOM_NOTE = {
   rollback: 'kept to go back to',
   planner: 'kept to go back to',
-  old: 'kept to go back to',
   dangling: 'left over, nothing uses it',
   unused: 'nothing uses it right now',
 };
@@ -1290,23 +1291,36 @@ function roomFold() {
 // passwords out) and a restart (by the updater, with its rules)
 let shownLog = null;
 let logWait = null;
-function getLog(name) {
-  const at = Date.now() / 1000;
+async function lastLog() {
+  const [head, ...rest] = (await (await fetch(API + '?logs', {cache: 'no-store', signal: AbortSignal.timeout(8000)})).text()).split('\n');
+  return {head, text: rest.join('\n').trim()};
+}
+// taken once another one than before is there (by the mower's clock in its head, this one's may differ), given up after
+// a minute
+async function getLog(name) {
   shownLog = {name, text: null};
-  ask('logs=' + name);
   clearInterval(logWait);
-  logWait = setInterval(async () => {
+  render();
+  const before = await lastLog().then((l) => l.head, () => '');
+  if (!shownLog || shownLog.name !== name) return;
+  ask('logs=' + name);
+  const wait = (logWait = setInterval(async () => {
     try {
-      const text = await (await fetch(API + '?logs', {cache: 'no-store', signal: AbortSignal.timeout(8000)})).text();
-      const [head, ...rest] = text.split('\n');
-      const m = /^#(\S+) (\d+)$/.exec(head);
-      if (!m || m[1] !== name || Number(m[2]) < at - 2) return;
-      clearInterval(logWait);
-      if (shownLog && shownLog.name === name) shownLog = {name, text: rest.join('\n').trim()};
+      const l = await lastLog();
+      const m = /^#(\S+) \d+$/.exec(l.head);
+      if (!m || m[1] !== name || l.head === before) return;
+      clearInterval(wait);
+      if (shownLog && shownLog.name === name) shownLog = {name, text: l.text};
       render();
     } catch {}
-  }, 1500);
-  setTimeout(() => clearInterval(logWait), 60000);
+  }, 1500));
+  setTimeout(() => {
+    clearInterval(wait);
+    if (shownLog && shownLog.name === name && shownLog.text === null) {
+      shownLog = null;
+      render();
+    }
+  }, 60000);
 }
 function restartLine(name) {
   const [who, what, t, why] = S('restarted').split(' ');
@@ -1342,12 +1356,13 @@ function containerFold() {
           c.restarts > 0 && tr('{n} restarts by itself', {n: c.restarts})].filter(Boolean).join(' · ')),
         restartLine(c.name),
         h('div', {class: 'row'},
-          h('button', {class: 'control', 'data-key': 'log:' + c.name, disabled: busy(), onclick: () => {
+          // (its own log is the one further down)
+          !c.self && h('button', {class: 'control', 'data-key': 'log:' + c.name, disabled: busy(), onclick: () => {
             if (open && shownLog.text !== null) {
               shownLog = null;
               render();
             } else getLog(c.name);
-          }}, open && shownLog.text !== null ? tr('Hide the log') : tr('Log')),
+          }}, open && shownLog.text !== null ? tr('Hide the log') : tr('Show the log')),
           c.self
             ? dim(tr('restarts itself with its updates'))
             : c.state === 'running'
