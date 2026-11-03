@@ -14,7 +14,13 @@ was=$(docker inspect -f '{{.State.StartedAt}}' "$ME" 2>/dev/null)
 
 log "updater: starting its new version"
 # (never pulled here: the new image is there, and the one before stays the way back)
-compose 300 "$ME" up -d --no-deps --pull never "$svc" > /dev/null 2>&1
+# (compose itself failing says nothing about the new version: the one before again, the new one not left out)
+if ! compose 300 "$ME" up -d --no-deps --pull never "$svc" > /dev/null 2>&1; then
+  log "updater: its new version couldn't be started, the one before stays"
+  docker tag "$old" "$ref"
+  compose 300 "$ME" up -d --no-deps --pull never "$svc" > /dev/null 2>&1
+  exit 1
+fi
 n=0
 while [ $n -lt 24 ]; do
   sleep 5
