@@ -1423,16 +1423,33 @@ calib_look() {
 # file as it was and OpenMower started on that. not in the dock it waits for it (calib_pending, the newest request,
 # tried each round for CALIB_WAIT)
 calib() {
-  local out img
-  if ! docked; then
-    status calib_pending "$(now)" "$1"
+  local out img since
+  # (OpenMower stopped isn't started from here, nor next to MowBite OS)
+  if ! running "$OM" || os_host; then
+    out=os_host
+    running "$OM" || out=stopped
+    status calib_pending
+    status calib refused "$(now)" "$out"
+    log "calibration: nothing written, $([ "$out" = stopped ] && echo "OpenMower doesn't run" || echo "MowBite OS runs on the mower")"
+    return 1
+  fi
+  # (still in the dock once the schedule is held: a start sent just before shows by then)
+  if docked && img=$(image_of "$OM") && hold openmower; then
+    docked || unhold
+  elif docked; then
+    status calib_pending
+    status calib error "$(now)" hold
+    return 1
+  fi
+  if [ -z "$held" ]; then
+    # (the same request keeps waiting since it came)
+    since=$(get calib_pending)
+    [ "${since#* }" = "$1" ] && since=${since%% *} || { since=$(now) && log "calibration: waits for the mower idle in the dock"; }
+    status calib_pending "$since" "$1"
     status calib waiting "$(now)"
-    log "calibration: waits for the mower idle in the dock"
     return 2
   fi
   status calib_pending
-  img=$(image_of "$OM")
-  hold openmower || { status calib error "$(now)" hold; return 1; }
   # shellcheck disable=SC2086
   if [ "$1" = back ]; then out=$(calib_run back); else out=$(calib_run write $1); fi
   case $out in
@@ -1982,6 +1999,12 @@ restart_box() {
     fi
     img=$(image_of "$OM")
     hold openmower || { status restarted "$1" error "$(now)" hold; return 0; }
+    if ! docked; then
+      unhold
+      status restarted "$1" refused "$(now)" not_docked
+      log "$1: not started again, the mower left the dock"
+      return 0
+    fi
     progress openmower restart
     if docker restart "$OM" > /dev/null 2>&1 && rehold && seen openmower "$img"; then
       status restarted "$1" "done" "$(now)"
@@ -1995,10 +2018,17 @@ restart_box() {
   elif ! quiet; then
     status restarted "$1" refused "$(now)" busy
     log "$1: not started again, OpenMower drives the mower"
+  elif [ "$1" = "$PLANNER" ] && ! { hold planner && quiet; }; then
+    # (the planner with the schedule held: a run starting meanwhile would get no plan)
+    unhold
+    status restarted "$1" refused "$(now)" busy
+    log "$1: not started again, the schedule couldn't be held or the mower drives"
   elif docker restart "$1" > /dev/null 2>&1; then
+    unhold
     status restarted "$1" "done" "$(now)"
     log "$1: started again, asked for on its page"
   else
+    unhold
     status restarted "$1" error "$(now)" failed
     log "$1: couldn't be started again"
   fi
