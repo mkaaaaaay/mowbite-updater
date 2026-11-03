@@ -332,7 +332,7 @@ services:
       MOWBITE_CONTAINER: $P-mowbite
       PLANNER_CONTAINER: $P-planner
       PRUNE: "0"
-      ROOM_LABEL: mbt.run=$P
+      TEST_LABEL: mbt.run=$P
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - $STACKS:$STACKS
@@ -1314,6 +1314,20 @@ mower docked
 post "restart=$P-talk" > /dev/null
 until_true "s.get('restarted', '').startswith('$P-talk done')" 60 && [ "$(docker inspect -f '{{.State.StartedAt}}' "$P-talk")" != "$before" ] &&
   ok "restarted when asked" || bad "not restarted: $(val "s.get('restarted')")"
+# (MowBite OS on the mower: OpenMower never started again next to it)
+docker run -d --name "$P-oshost" --label "mbt.run=$P" --label mowbite.os=host busybox:1.37-musl sleep 3600 > /dev/null
+post "restart=$P-om" > /dev/null
+until_true "s.get('restarted', '').startswith('$P-om refused') and s.get('restarted', '').endswith('os_host')" 60 &&
+  ok "OpenMower not restarted next to MowBite OS" || bad "OpenMower next to MowBite OS: $(val "s.get('restarted')")"
+docker rm -f "$P-oshost" > /dev/null 2>&1
+# (a stopped one isn't started from here)
+docker stop -t 1 "$P-talk" > /dev/null
+post containers > /dev/null
+until_true "any(c['name'] == '$P-talk' and c['state'] == 'exited' for c in d.get('containers', []))" 60
+post "restart=$P-talk" > /dev/null
+until_true "s.get('restarted', '').startswith('$P-talk refused') and s.get('restarted', '').endswith('stopped')" 60 &&
+  [ "$(docker inspect -f '{{.State.Running}}' "$P-talk")" = false ] && ok "a stopped container isn't started" ||
+  bad "the stopped one: $(val "s.get('restarted')"), running $(docker inspect -f '{{.State.Running}}' "$P-talk")"
 
 say "done"
 finished=1

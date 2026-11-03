@@ -251,6 +251,8 @@ const DE = {
   'Started again, {t}.': 'Neu gestartet, {t}.',
   "Not started again: the mower isn't idle in the dock.": 'Nicht neu gestartet: Der Mäher steht nicht ruhig im Dock.',
   'Not started again: OpenMower drives the mower.': 'Nicht neu gestartet: OpenMower fährt den Mäher gerade.',
+  "Not started: it was stopped, it's only started the updater's own way.": 'Nicht gestartet: Er war gestoppt, starten tut ihn nur der Updater auf seinem Weg.',
+  'Not started again: MowBite OS runs on the mower, OpenMower never runs next to it.': 'Nicht neu gestartet: Auf dem Mäher läuft MowBite OS, OpenMower läuft nie daneben.',
   'Started again, but it does not answer.': 'Neu gestartet, antwortet aber nicht.',
   "Couldn't be started again.": 'Konnte nicht neu gestartet werden.',
   'Newest at the bottom': 'Neueste unten',
@@ -1310,7 +1312,12 @@ function restartLine(name) {
   const [who, what, t, why] = S('restarted').split(' ');
   if (who !== name) return null;
   if (what === 'done') return dim(tr('Started again, {t}.', {t: when(t)}));
-  if (what === 'refused') return h('p', {class: 'warn'}, tr(why === 'not_docked' ? "Not started again: the mower isn't idle in the dock." : 'Not started again: OpenMower drives the mower.'));
+  if (what === 'refused')
+    return h('p', {class: 'warn'}, tr({
+      not_docked: "Not started again: the mower isn't idle in the dock.",
+      stopped: "Not started: it was stopped, it's only started the updater's own way.",
+      os_host: 'Not started again: MowBite OS runs on the mower, OpenMower never runs next to it.',
+    }[why] || 'Not started again: OpenMower drives the mower.'));
   if (what === 'error') return h('p', {class: 'warn'}, tr(why === 'not_running' ? 'Started again, but it does not answer.' : "Couldn't be started again."));
   return null;
 }
@@ -1341,7 +1348,11 @@ function containerFold() {
               render();
             } else getLog(c.name);
           }}, open && shownLog.text !== null ? tr('Hide the log') : tr('Log')),
-          c.self ? dim(tr('restarts itself with its updates')) : twoTaps('restart:' + c.name, tr('Restart'), tr('Really restart?'), () => ask('restart=' + c.name))),
+          c.self
+            ? dim(tr('restarts itself with its updates'))
+            : c.state === 'running'
+              ? twoTaps('restart:' + c.name, tr('Restart'), tr('Really restart?'), () => ask('restart=' + c.name))
+              : h('span')),
         restarting && dim(tr('Restarting…')),
         logging && dim(tr('Getting the log…')),
         open && shownLog.text !== null && h('div', {class: 'act'}, copyButton('copy:' + c.name, shownLog.text)),

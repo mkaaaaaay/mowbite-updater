@@ -16,8 +16,8 @@
 #   POST ?free=<what>   delete img:<id> (one from that list), all but the ways back or cache (the build cache)
 #   POST ?containers    list the containers of the stacks (in the GET's containers)
 #   POST ?logs=<name>   a container's last log lines with passwords and access out, for GET ?logs
-#   POST ?restart=<name> a container of the list started again within the next minute: while OpenMower doesn't drive the
-#                       mower, OpenMower itself idle in the dock. not the updater
+#   POST ?restart=<name> a running container of the list started again within the next minute: while OpenMower doesn't
+#                       drive the mower, OpenMower itself idle in the dock and never next to MowBite OS. not the updater
 #   GET ?logs           the log asked for last: "#<name> <unix>", then its lines
 # a POST only with Content-Type: application/json (whatever the body), and nothing for other sites' pages to read: a
 # page in some browser in the network can't change anything here directly, its own page and programs can. MowBite passes

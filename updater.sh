@@ -1829,8 +1829,8 @@ check_room() {
   local df out p only=
   used=" $(docker ps -aq | xargs -r docker inspect -f '{{.Image}}' 2>/dev/null | tr '\n' ' ') "
   named=" $(compose_refs | tr '\n' ' ') $(for p in $(part_ids); do get "pending_$p" | cut -d' ' -f1; done | tr '\n' ' ') "
-  # (a test on a pc with images of its own: only the ones with this label, ROOM_LABEL=<key>=<value>)
-  [ -n "${ROOM_LABEL:-}" ] && only=" $(docker images -q --no-trunc --filter "label=$ROOM_LABEL" | sort -u | tr '\n' ' ') "
+  # (a test on a pc with images and containers of its own: only the ones with this label, TEST_LABEL=<key>=<value>)
+  [ -n "${TEST_LABEL:-}" ] && only=" $(docker images -q --no-trunc --filter "label=$TEST_LABEL" | sort -u | tr '\n' ' ') "
   # (one look at docker's disk: the images, then the build cache)
   df=$(mktemp)
   timeout $T_UP docker system df -v --format '{{json .Images}}\n{{json .BuildCache}}' > "$df" 2>/dev/null
@@ -1956,13 +1956,25 @@ box_logs() {
   { echo "#$1 $(now)"; docker logs --tail 300 --timestamps "$1" 2>&1 | redact "$(secrets "$1")"; } > "$out"
   mv "$out" "$STATE/logs"
 }
-# a container of the stacks started again, asked for on its page: only while OpenMower doesn't drive the mower, OpenMower
-# itself only idle in the dock with MowBite's schedule held and seen answering after. status restarted "<name> <done|
-# refused|error> <unix> [why]"
+# a MowBite OS host running on the mower: a container labelled mowbite.os or of an image named mowbite-os. OpenMower is
+# never started next to one (two hosts at the board)
+os_host() {
+  docker ps ${TEST_LABEL:+--filter "label=$TEST_LABEL"} --format '{{.Names}}|{{.Image}}|{{.Label "mowbite.os"}}' 2> /dev/null |
+    awk -F'|' '$3 != "" || $2 ~ /(^|\/)mowbite[-_]os([-_:@]|$)/ { found = 1 } END { exit !found }'
+}
+# a running container of the stacks started again, asked for on its page: only while OpenMower doesn't drive the mower,
+# OpenMower itself only idle in the dock with MowBite's schedule held and seen answering after, never next to a MowBite
+# OS host. a stopped one isn't started from here. status restarted "<name> <done|refused|error> <unix> [why]"
 restart_box() {
   local img
   is_box "$1" || return 0
-  if [ "$1" = "$OM" ]; then
+  if ! running "$1"; then
+    status restarted "$1" refused "$(now)" stopped
+    log "$1: not started, it was stopped"
+  elif [ "$1" = "$OM" ] && os_host; then
+    status restarted "$1" refused "$(now)" os_host
+    log "$1: not started again, MowBite OS runs on the mower"
+  elif [ "$1" = "$OM" ]; then
     if ! docked; then
       status restarted "$1" refused "$(now)" not_docked
       log "$1: not started again, the mower isn't idle in the dock"
