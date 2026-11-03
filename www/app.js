@@ -110,6 +110,8 @@ const DE = {
   "This version was built on its own, it isn't the official one.": 'Diese Version wurde selbst gebaut, sie ist nicht die offizielle.',
   'Stable is the newest release without "beta". It can be older than the beta that runs now, going there leaves out what came since.':
     'Stabil ist die neueste Version ohne „beta“. Sie kann älter sein als die Beta, die gerade läuft, dann fehlt, was seitdem dazukam.',
+  'Stable is the default: the newest release without "beta". To get new planners first, pick Beta.':
+    'Standard ist Stabil: das neueste Release ohne „beta“. Wer neue Planer zuerst will, stellt Beta ein.',
   'Stable is the newest release without "beta", built from its main branch as long as there is none. It can be older than the beta that runs now, going there leaves out what came since.':
     'Stabil ist die neueste Version ohne „beta“, solange es keine gibt, wird aus dem Hauptzweig gebaut. Sie kann älter sein als die Beta, die gerade läuft, dann fehlt, was seitdem dazukam.',
   'Built from a local copy, it is left as it is.': 'Aus einer lokalen Kopie gebaut, er bleibt, wie er ist.',
@@ -941,7 +943,8 @@ function partCard(p) {
   const notes = [
     p.kind === 'image' && st.conf[id] === 'stable' && !S(id + '_stable_older') &&
       dim(tr('Stable is the newest release without "beta". It can be older than the beta that runs now, going there leaves out what came since.')),
-    p.kind === 'build' && st.conf[id] === 'stable' &&
+    id === 'planner' && stable && dim(tr('Stable is the default: the newest release without "beta". To get new planners first, pick Beta.')),
+    p.kind === 'build' && id !== 'planner' && st.conf[id] === 'stable' &&
       dim(tr('Stable is the newest release without "beta", built from its main branch as long as there is none. It can be older than the beta that runs now, going there leaves out what came since.')),
     p.kind === 'openmower' && auto && st.conf.openmower === 'edge' &&
       dim(tr("Edge changes often, an update at night can bring a new fault. Only when there's room for the old and the new version at once.")),

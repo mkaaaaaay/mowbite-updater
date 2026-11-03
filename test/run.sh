@@ -1149,6 +1149,10 @@ gh_releases v0.2.0 v0.1.0-beta.7 -- v0.2.0
   bad "v0.2.0: $(val "s.get('planner')") $(val "s.get('planner_available')") release $(val "s.get('planner_release')")"
 gh_refs "$OLD" v0.1.0-beta.7 "$OLD" v0.2.0 "$MAIN" v0.3.0-beta.1 "$NEW"
 gh_releases v0.3.0-beta.1 v0.2.0 v0.1.0-beta.7 -- v0.2.0
+[ "$(look)" = "current no v0.2.0" ] && runs_on "$P-planner" "$ran" && [ "$(val "s.get('planner_built')")" = "$MAIN" ] &&
+  [ "$(val "c.get('planner')")" = stable ] && ok "without a channel set the planner stays on stable, its beta isn't built" ||
+  bad "default: $(val "s.get('planner')") $(val "s.get('planner_available')") channel $(val "c.get('planner')")"
+post conf 'planner beta' > /dev/null
 [ "$(look)" = "updated no v0.3.0-beta.1" ] && [ "$(val "s.get('planner_built')")" = "$NEW" ] &&
   [ "$(val "s.get('planner', '').split(' ')[-1]")" = v0.3.0-beta.1 ] && [ "$(val "s.get('planner_release')")" = v0.3.0-beta.1 ] &&
   ok "on beta its highest release, built" || bad "beta: $(val "s.get('planner')") $(val "s.get('planner_available')") built $(val "s.get('planner_built')")"
@@ -1158,7 +1162,6 @@ post conf 'planner stable' > /dev/null
 [ "$(look)" = "updated no v0.2.0" ] && [ "$(val "s.get('planner_built')")" = "$MAIN" ] &&
   [ "$(val "s.get('planner_release')")" = v0.2.0 ] && ok "on stable the newest release without a dash" ||
   bad "stable: $(val "s.get('planner')") $(val "s.get('planner_available')") built $(val "s.get('planner_built')")"
-post conf 'planner beta' > /dev/null
 
 say "itself"
 t0=$(date +%s)

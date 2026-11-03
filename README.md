@@ -101,8 +101,9 @@ Without a check it waits for Docker's own health check, or else half a minute wi
   update to another version line (1.3 to 1.4) the card warns you.
 - **OpenMowerOS 3:** there OpenMower updates with the system (`openmower update-os`). The updater leaves OpenMower alone
   and keeps the other apps up to date.
-- **Apps built from GitHub** (like the MowBite Planner): built again when GitHub has something new. A build that
-  changes nothing doesn't restart the app.
+- **Apps built from GitHub** (like the MowBite Planner): built again when GitHub has something new. The planner
+  follows its releases: stable unless you pick beta on its card, then its betas come first. A build that changes
+  nothing doesn't restart the app.
 - **Your stacks folder:** it works on the stacks in `/opt/stacks` (Dockge's folder). If yours are somewhere else, change
   both sides of that line in `compose.yaml`.
 - **Docker access:** like Dockge it needs `/var/run/docker.sock`. It changes your stacks only through their compose

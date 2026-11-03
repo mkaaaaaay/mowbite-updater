@@ -104,9 +104,13 @@ om_version() {
   valid "$v" "$TAG" && echo "$v"
 }
 
-# the channels: an image part with releases beta or stable, OpenMower edge, latest (its release) or what its .env has.
-# automatic: 1 or 0 each
-channel() { [ "$(conf "$1" beta)" = stable ] && echo stable || echo beta; }
+# the channels: a part with releases beta or stable (the planner stable while none is set, its betas only for those who
+# pick beta; the others beta), OpenMower edge, latest (its release) or what its .env has. automatic: 1 or 0 each
+channel() {
+  local d=beta
+  [ "$1" = planner ] && d=stable
+  [ "$(conf "$1" $d)" = stable ] && echo stable || echo beta
+}
 # (its interface takes the version of the .env as the updater noted it at its last look, the updater reads the file)
 om_env_version() { if [ -n "$REQUEST_METHOD" ] && [ -n "$(get openmower_env)" ]; then get openmower_env; else om_version; fi; }
 om_choices() { printf 'edge latest %s' "$(om_env_version)"; }
