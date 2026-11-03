@@ -332,6 +332,7 @@ services:
       MOWBITE_CONTAINER: $P-mowbite
       PLANNER_CONTAINER: $P-planner
       PRUNE: "0"
+      ROOM_LABEL: mbt.run=$P
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - $STACKS:$STACKS
@@ -1252,6 +1253,27 @@ until_true "int(s.get('${APP3}_at', 0)) >= int(s.get('updater_at', 0)) and s.get
 post self > /dev/null
 until_true "s.get('updater', '').startswith('skipped_failed')" 60 && ok "not tried again" || bad "itself again: $(val "s.get('updater')")"
 [ "$(docker inspect -f '{{.State.Running}}' "$P-updater" 2> /dev/null)" = true ] && ok "and it runs" || bad "the updater doesn't run any more"
+
+say "making room: all of it but the ways back"
+dir=$WORK/img/junk2
+mkdir -p "$dir"
+printf 'FROM busybox:1.37-musl\nLABEL mbt.run=%s mbt.junk=%s\n' "$P" "$(date +%s)-2" > "$dir/Dockerfile"
+docker build -q -t "$P-junk:2" "$dir" > /dev/null
+printf 'FROM busybox:1.37-musl\nLABEL mbt.run=%s mbt.keep=%s\n' "$P" "$(date +%s)" > "$dir/Dockerfile"
+docker build -q -t "$P-junk:keep-test" "$dir" > /dev/null
+junk=$(id_of "$P-junk:2" | sed 's/^sha256://' | cut -c1-12)
+kept=$(id_of "$P-junk:keep-test" | sed 's/^sha256://' | cut -c1-12)
+post room > /dev/null
+until_true "not d.get('requested') and not s.get('taken') and any(i['id'] == '$junk' for i in d.get('room', {}).get('items', [])) and any(i['id'] == '$kept' and i['kind'] == 'rollback' for i in d.get('room', {}).get('items', []))" 120 &&
+  ok "one's own way back (keep-) is on the list as a way back" || bad "keep- not on the list as a way back: $kept"
+# (the ways back of this run as they are before: its own rb-, previous and before- tags)
+ways_back() { docker images --filter "label=mbt.run=$P" --format '{{.Repository}}:{{.Tag}}' | grep -E ':(rb-|previous$|before-|keep-)' | sort; }
+before=$(ways_back)
+post free=all > /dev/null
+until_sh '! docker image inspect "$P-junk:2" > /dev/null 2>&1' 120 && ok "delete all: what nothing needs goes" || bad "not deleted: $P-junk:2"
+until_true "not d.get('requested') and not s.get('taken')" 60
+[ -n "$before" ] && [ "$(ways_back)" = "$before" ] && ok "the ways back stay" || bad "ways back before: $(echo "$before" | tr '\n' ' '), after: $(ways_back | tr '\n' ' ')"
+docker rmi "$P-junk:keep-test" > /dev/null 2>&1
 
 say "done"
 finished=1

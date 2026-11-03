@@ -210,8 +210,8 @@ const DE = {
   'Make room': 'Platz schaffen',
   '{gb} GB free': '{gb} GB frei',
   '{size} can be freed': '{size} lassen sich freigeben',
-  'Old versions and leftovers from building that nothing needs right now. After each update it clears away leftovers without a name, the unused leftovers from building and older versions beyond the ones kept by itself, the rest only when you tap it here.':
-    'Alte Versionen und Reste vom Bauen, die gerade nichts braucht. Nach jedem Update räumt er Reste ohne Namen, ungenutzte Reste vom Bauen und ältere Versionen über die behaltenen hinaus selbst weg, alles andere nur, wenn du es hier antippst.',
+  'Old versions and leftovers from building that nothing needs right now. After each update it clears away leftovers without a name, the unused leftovers from building and older versions beyond the ones kept by itself, the rest only when you tap it here. Versions kept to go back to only one at a time.':
+    'Alte Versionen und Reste vom Bauen, die gerade nichts braucht. Nach jedem Update räumt er Reste ohne Namen, ungenutzte Reste vom Bauen und ältere Versionen über die behaltenen hinaus selbst weg, alles andere nur, wenn du es hier antippst. Aufgehobene Stände zum Zurückgehen nur einzeln.',
   'an old version without a name': 'eine alte Version ohne Namen',
   '{name}, the version before the update on {d}': '{name}, Stand vor dem Update am {d}',
   '{name}, the version before its last update': '{name}, Stand vor seinem letzten Update',
@@ -228,7 +228,7 @@ const DE = {
   'Delete': 'Löschen',
   'Clear': 'Leeren',
   'Really delete?': 'Wirklich löschen?',
-  'Delete all ({size})': 'Alles löschen ({size})',
+  'Delete all but the ways back ({size})': 'Alles außer Rückwegen löschen ({size})',
   'Add another app': 'Weitere App aufnehmen',
   'Update other apps on the mower too': 'Andere Apps auf dem Mäher mit aktualisieren',
   'Any other app of your stacks, the updater then looks after it like the others: only with the mower ready in the dock, and back to the version before when the new one doesn\'t run for half a minute.':
@@ -1201,6 +1201,8 @@ const ROOM_NOTE = {
   unused: 'nothing uses it right now',
 };
 // an image to make room with, by the part it's of and what it was: "MowBite, the version before the update on 27.10.2026"
+// kept to go back to: deleted one at a time, never with the rest
+const WAY_BACK = ['rollback', 'planner'];
 function roomName(refs) {
   if (refs === '-') return tr('an old version without a name');
   const ref = refs.split(',')[0];
@@ -1223,6 +1225,8 @@ function roomFold() {
   const cache = (st.room && st.room.cache) || 0;
   const free = freeMb();
   const total = items.reduce((n, i) => n + i.bytes, 0);
+  // all of it but the ways back: those only one at a time
+  const loose = items.filter((i) => !WAY_BACK.includes(i.kind));
   const builds = PARTS().filter((p) => p.kind === 'build');
   const planner = builds.length === 1 && builds[0].id === 'planner';
   const look = askedSince('room');
@@ -1233,7 +1237,7 @@ function roomFold() {
   // (by itself when the mower runs out of room)
   const short = (free !== null && free < 1024) || ALL().some((p) => S(p.id).startsWith('nospace'));
   return fold('room', look !== null || del !== null, short, tr('Make room'), sub,
-    dim(tr('Old versions and leftovers from building that nothing needs right now. After each update it clears away leftovers without a name, the unused leftovers from building and older versions beyond the ones kept by itself, the rest only when you tap it here.')),
+    dim(tr('Old versions and leftovers from building that nothing needs right now. After each update it clears away leftovers without a name, the unused leftovers from building and older versions beyond the ones kept by itself, the rest only when you tap it here. Versions kept to go back to only one at a time.')),
     items.map((i) => h('div', {class: 'item'},
       h('span', {class: 'itemName', title: i.refs === '-' ? null : i.refs.split(',').join(', ')}, roomName(i.refs)),
       dim(tr(ROOM_NOTE[i.kind] || ROOM_NOTE.unused)),
@@ -1248,7 +1252,9 @@ function roomFold() {
     failedHere('room'),
     h('div', {class: 'row'},
       h('button', {class: 'control', 'data-key': 'room', disabled: busy(), onclick: () => ask('room')}, tr('Look again')),
-      items.length > 1 ? twoTaps('free-all', tr('Delete all ({size})', {size: size(total)}), tr('Really delete?'), () => ask('free=all')) : h('span')),
+      loose.length > 1
+        ? twoTaps('free-all', tr('Delete all but the ways back ({size})', {size: size(loose.reduce((n, i) => n + i.bytes, 0))}), tr('Really delete?'), () => ask('free=all'))
+        : h('span')),
   );
 }
 

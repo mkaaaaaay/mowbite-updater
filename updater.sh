@@ -1826,22 +1826,24 @@ function field(k,    v) {
 # one line per image: img <id> <bytes> <its tags, comma separated, or -> <kind>, then: cache <bytes> (what clearing it
 # frees: the entries no image shares). the way back of a part not seen running yet isn't listed
 check_room() {
-  local df out p
+  local df out p only=
   used=" $(docker ps -aq | xargs -r docker inspect -f '{{.Image}}' 2>/dev/null | tr '\n' ' ') "
   named=" $(compose_refs | tr '\n' ' ') $(for p in $(part_ids); do get "pending_$p" | cut -d' ' -f1; done | tr '\n' ' ') "
+  # (a test on a pc with images of its own: only the ones with this label, ROOM_LABEL=<key>=<value>)
+  [ -n "${ROOM_LABEL:-}" ] && only=" $(docker images -q --no-trunc --filter "label=$ROOM_LABEL" | sort -u | tr '\n' ' ') "
   # (one look at docker's disk: the images, then the build cache)
   df=$(mktemp)
   timeout $T_UP docker system df -v --format '{{json .Images}}\n{{json .BuildCache}}' > "$df" 2>/dev/null
   # (next to the list it replaces: moved in place whole, its page never reads half of it)
   out=$(mktemp "$STATE/room.XXXXXX") || { rm -f "$df"; return; }
-  sed -n 1p "$df" | sed 's/^\[//; s/\]$//; s/},{/}\n{/g' | awk -v used="$used" -v named="$named" "$bytes_awk"'
+  sed -n 1p "$df" | sed 's/^\[//; s/\]$//; s/},{/}\n{/g' | awk -v used="$used" -v named="$named" -v only="$only" "$bytes_awk"'
     {
       id = field("ID"); repo = field("Repository"); tag = field("Tag"); ref = repo ":" tag
-      if (id == "") next
+      if (id == "" || (only != "" && !index(only, " " id " "))) next
       if (field("Containers") != "0" || index(used, " " id " ") || (repo != "<none>" && index(named, " " ref " "))) { keep[id] = 1; next }
       size[id] = bytes(field("UniqueSize"))
       if (repo != "<none>") refs[id] = refs[id] (refs[id] == "" ? "" : ",") ref
-      k = repo == "<none>" ? "dangling" : tag ~ /^rb-|^previous$/ ? "rollback" : tag ~ /^before-/ ? "planner" : tag ~ /^prev-/ ? "old" : "unused"
+      k = repo == "<none>" ? "dangling" : tag ~ /^rb-|^previous$|^keep-/ ? "rollback" : tag ~ /^before-/ ? "planner" : tag ~ /^prev-/ ? "old" : "unused"
       if (kind[id] == "" || kind[id] == "unused") kind[id] = k
     }
     END { for (id in size) if (!keep[id]) print "img", substr(id, 8, 12), size[id], (refs[id] == "" ? "-" : refs[id]), kind[id] }' > "$out"
@@ -1850,8 +1852,9 @@ check_room() {
   mv "$out" "$STATE/room"
 }
 
-# what was asked to delete: one image from the list (all its tags, never forced), all of them, or the build cache.
-# the list is made again first: only what still nothing needs goes
+# what was asked to delete: one image from the list (all its tags, never forced), all of them but the ways back (rb-,
+# previous, before-, keep-: those one at a time), or the build cache. the list is made again first: only what still
+# nothing needs goes
 room_free() {
   alive
   before=$(free_mb)
@@ -1863,8 +1866,12 @@ room_free() {
     log "room: build cache cleared"
     ;;
   img | all)
-    grep '^img ' "$STATE/room" 2>/dev/null | while read -r _ id _ refs _; do
-      [ "$1" = all ] || [ "$id" = "$2" ] || continue
+    grep '^img ' "$STATE/room" 2>/dev/null | while read -r _ id _ refs kind; do
+      if [ "$1" = all ]; then
+        case $kind in rollback | planner) continue ;; esac
+      elif [ "$id" != "$2" ]; then
+        continue
+      fi
       alive
       if [ "$refs" = - ]; then
         docker rmi "$id" > /dev/null 2>&1 && log "room: removed image $id"
