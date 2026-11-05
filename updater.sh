@@ -547,6 +547,69 @@ drop_tag() {
   docker rmi "$1" > /dev/null 2>&1 && log "removed $1, nothing uses it any more"
 }
 
+# --- data kept before an update ---
+
+# the newest copies of a part's data kept, on the mower only: mower_params.yaml has the ntrip login
+KEEP_DATA=2
+ROOM_DATA=100
+# what a part mounts at $2: a volume's name or the host's path
+mount_at() {
+  docker inspect -f '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}{{else}}{{.Source}}{{end}}|{{.Destination}}{{println}}{{end}}' "$1" 2> /dev/null |
+    awk -F'|' -v d="$2" '$2 == d {print $1; exit}'
+}
+# the data of part $1, "<what to mount>|<path in it>" a line: OpenMower its map and mower_params.yaml, MowBite its /data
+data_of() {
+  local m
+  case $1 in
+  openmower)
+    m=$(mount_at "$OM" /data/ros)
+    [ -n "$m" ] && echo "$m|map.json"
+    calib_where
+    ;;
+  mowbite)
+    m=$(mount_at "$(box mowbite)" /data)
+    [ -n "$m" ] && echo "$m|."
+    ;;
+  esac
+  return 0
+}
+# part $1's data before its update: each as a tar read by a helper of its own image without network that sees it
+# read-only, with their sha256 and what they are. the folder gets its name only once all of it is there. 1 when it has
+# data that can't be kept
+keep_data() {
+  local list dir tmp
+  list=$(data_of "$1")
+  [ -n "$list" ] || return 0
+  room_for "$ROOM_DATA" || { log "$1: not enough room to keep its data ($(free_mb) MB free)"; return 1; }
+  dir=$STATE/data/$1-$(now)
+  tmp=$dir.new
+  rm -rf "$STATE/data/$1-"*.new
+  mkdir -p "$STATE/data" && chmod 700 "$STATE/data" && mkdir -m 700 "$tmp" || return 1
+  # (a path that isn't there, a map not saved yet: nothing to keep of it)
+  if printf '%s\n' "$list" | {
+    i=0
+    while IFS= read -r w; do
+      i=$((i + 1))
+      docker run --rm --network none --pull never -v "${w%|*}:/s:ro" --entrypoint sh "$(image_of "$ME")" \
+        -c 'cd /s && { [ -e "$1" ] || exit 3; } && tar -cf - -- "$1"' sh "${w##*|}" > "$tmp/$i.tar"
+      case $? in
+      0) printf '%s %s\n' "$i" "$w" >> "$tmp/what" ;;
+      3) rm -f "$tmp/$i.tar" ;;
+      *) exit 1 ;;
+      esac
+    done
+  } && { [ ! -s "$tmp/what" ] || { (cd "$tmp" && sha256sum -- *.tar > sha256) && sync && mv "$tmp" "$dir"; }; }; then
+    rm -rf "$tmp"
+    [ -d "$dir" ] && log "$1: its data kept in $dir"
+    for d in "$STATE/data/$1-"*; do printf '%s\n' "$d"; done | grep -E "/$1-[0-9]+\$" | awk -F- '{print $NF, $0}' | sort -nr |
+      awk -v k=$KEEP_DATA 'NR > k' | cut -d' ' -f2- | while IFS= read -r d; do rm -rf "$d"; done
+    return 0
+  fi
+  rm -rf "$tmp"
+  log "$1: its data can't be kept"
+  return 1
+}
+
 # --- the progress, for the bars ---
 
 # what it does right now: "<part> <step> <percent or -> <since> [<done> <of>]", the step's start kept while it lasts.
@@ -1016,6 +1079,13 @@ update_image() {
     undo_back "$back" "$current"
     return 2
   fi
+  if ! keep_data "$p"; then
+    log "$p: nothing changed"
+    undo_change "$p"
+    undo_back "$back" "$current"
+    outcome "$p" error data
+    return 1
+  fi
   log "$p: $current -> $target"
   status "pending_$p" "$back" "$current" "$pulled" "$pulled" ${d:+"$d"}
   if restart "$p" "$pulled"; then
@@ -1261,10 +1331,12 @@ update_openmower() {
   elif [ $rc -eq 0 ] && [ "$(om_version)" != "$want" ]; then
     log "openmower: VERSION in $(om_env) was changed meanwhile, it stays as it is"
     rc=3
+  elif [ $rc -eq 0 ] && ! keep_data openmower; then
+    rc=6
   fi
   if [ $rc -ne 0 ]; then
     unhold
-    case $rc in 2 | 3 | 4 | 5) ;; *) log "openmower: pull failed, it stays as it is" ;; esac
+    case $rc in 2 | 3 | 4 | 5 | 6) ;; *) log "openmower: pull failed, it stays as it is" ;; esac
     undo_change openmower
     om_saved_back
     undo_back "$back" "$ref"
@@ -1275,6 +1347,7 @@ update_openmower() {
     3) outcome openmower error env ;;
     4) outcome openmower error hold ;;
     5) outcome openmower error schedule "$at" && return 2 ;;
+    6) outcome openmower error data ;;
     *) outcome openmower error pull ;;
     esac
     return 1

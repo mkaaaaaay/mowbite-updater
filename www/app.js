@@ -172,6 +172,7 @@ const DE = {
   'not done: the schedule starts the mower {when}, OpenMower is left alone until then':
     'nicht gemacht: Der Zeitplan startet den Mäher {when}, bis dahin bleibt OpenMower, wie es ist',
   "nothing restarted: MowBite's schedule couldn't be held (mqtt)": 'nichts neu gestartet: Der Zeitplan von MowBite ließ sich nicht anhalten (MQTT)',
+  "nothing changed: its data couldn't be kept first": 'nichts geändert: Seine Daten ließen sich vorher nicht sichern',
   'there is no version before to go back to': 'es gibt keine vorige Version zum Zurückgehen',
   "The version before didn't start, the one from before runs again.": 'Die vorige Version startete nicht, es läuft wieder die bisherige.',
   'going back failed, {name} may not be running': 'Zurückgehen fehlgeschlagen, {name} läuft womöglich nicht',
@@ -603,6 +604,7 @@ const ERRORS = {
   no_stable: 'no stable release found',
   base_missing: "not built: the OpenMower image it's built on isn't on the mower",
   hold: "nothing restarted: MowBite's schedule couldn't be held (mqtt)",
+  data: "nothing changed: its data couldn't be kept first",
 };
 function result(p) {
   const [state, ...rest] = S(p.id).split(' ');
