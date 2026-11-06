@@ -13,7 +13,8 @@ cd "$(dirname "$0")/.." || exit 1
 if [ "${1:-}" != in ]; then
   img=$(sed -n 's/^FROM \([^ ]*\)$/\1/p' Dockerfile | tail -n1)
   docker image inspect "$img" > /dev/null 2>&1 || docker pull -q "$img" > /dev/null || { echo "no $img"; exit 1; }
-  exec docker run --rm --network none -v "$PWD:/r:ro" --entrypoint sh "$img" /r/test/logic.sh in "${1:-all}"
+  # (a run that hangs ends by itself)
+  exec docker run --rm --network none -v "$PWD:/r:ro" --entrypoint timeout "$img" 300 sh /r/test/logic.sh in "${1:-all}"
 fi
 only=${2:-all}
 
@@ -41,8 +42,7 @@ inspect)
   shift 2
   for n in "$@"; do
     case $fmt in
-    *Mounts*RW*) c "$n" mounts ;;
-    *Mounts*) c "$n" mounts | cut -d'|' -f2,3 ;;
+    *Mounts*) c "$n" mounts ;;
     *project.config_files*'|'*) echo "proj|/stk|/stk/compose.yaml|" ;;
     *compose.service*) echo svc ;;
     *working_dir*) echo /stk ;;
@@ -169,7 +169,8 @@ fresh() {
   box_at mb sha256:mb r/mowbite:latest
   echo "volume|/vol/mb|/data|true" > /fake/c/mb/mounts
   box_at om sha256:om r/om:edge
-  printf 'bind|/vol/ros|/data/ros|true\nbind|/vol/params|/data/params|true\n' > /fake/c/om/mounts
+  # (the one asked for not first)
+  printf 'bind|/vol/params|/data/params|true\nbind|/vol/ros|/data/ros|true\n' > /fake/c/om/mounts
   mkdir -p /vol/mb/stats /vol/ros /vol/params
   echo 1 > /vol/mb/schema
   echo token > /vol/mb/notify.conf
@@ -180,6 +181,12 @@ fresh() {
   : > /fake/calls
 }
 newest() { data_dirs "$1" | head -n1; }
+# (and MowBite's data kept before an update, in $d)
+kept_fresh() {
+  fresh
+  keep_data mowbite update || bad "not kept to begin with"
+  d=$kept
+}
 
 if [ "$only" != self ]; then
 # --- kept ---
@@ -239,9 +246,7 @@ rm /fake/fail_keep_mower_params.yaml
 (free_mb() { echo 100; }; keep_data mowbite update) || bad "not kept with 100 MB free"
 
 # --- put back ---
-fresh
-keep_data mowbite update
-d=$kept
+kept_fresh
 before=$(cd /vol/mb && find . -type f | sort | xargs cat)
 echo 2 > /vol/mb/schema && echo other > /vol/mb/notify.conf && rm -r /vol/mb/stats && echo new > /vol/mb/junk
 put_data mowbite "$d" || bad "not put back"
@@ -252,41 +257,29 @@ grep -q "^putting mowbite $d /st/data/mowbite-[0-9]* | mowbite data " /fake/call
 k=$(data_dirs mowbite put | head -n1)
 [ -n "$k" ] && [ "$(tar -xOf "$k/1.tar" ./notify.conf)" = other ] && [ -d "$d" ] || bad "what it had not kept first, or the copy put back gone"
 called "^restart" && bad "started again in put_data"
-fresh
-keep_data mowbite update
-d=$kept
+kept_fresh
 echo x >> "$d/1.tar"
 echo other > /vol/mb/notify.conf
 put_data mowbite "$d" && bad "a changed copy put back"
 [ "$(cat /vol/mb/notify.conf)" = other ] && ! called "^stop" && [ -z "$(data_dirs mowbite put)" ] || bad "a changed copy: something changed"
-fresh
-keep_data mowbite update
-d=$kept
+kept_fresh
 echo "volume|/vol/other|/data|true" > /fake/c/mb/mounts
 put_data mowbite "$d" && bad "put back where it isn't mounted any more"
 ! called "^stop" || bad "stopped for a mount that went"
-fresh
-keep_data mowbite update
-d=$kept
+kept_fresh
 (free_mb() { echo 50; }; put_data mowbite "$d") && bad "put back without room"
 ! called "^stop" || bad "stopped without room"
-fresh
-keep_data mowbite update
-d=$kept
+kept_fresh
 echo other > /vol/mb/notify.conf
 (keep_data() { return 1; }; put_data mowbite "$d") && bad "put back without keeping what it had"
 [ "$(cat /vol/mb/notify.conf)" = other ] && [ -z "$(get data_put)" ] || bad "what it had not kept: something changed"
-fresh
-keep_data mowbite update
-d=$kept
+kept_fresh
 : > /fake/fail_put
 put_data mowbite "$d" && bad "a helper that failed to put it back, said done"
 [ -z "$(get data_put)" ] && grep -q "couldn't all be put back" /st/log || bad "a failed putting back: $(get data_put)"
 
 # --- the format of its data ---
-fresh
-keep_data mowbite update
-d=$kept
+kept_fresh
 [ -z "$(newer_data mowbite)" ] || bad "the same schema taken for a higher one"
 echo 2 > /vol/mb/schema
 [ "$(newer_data mowbite)" = "$d" ] || bad "a higher schema not seen"
@@ -303,15 +296,13 @@ echo 2 > /vol/mb/schema
 [ -z "$(newer_data mowbite)" ] || bad "no schema kept, but going back with its data"
 fresh
 [ -z "$(newer_data mowbite)" ] || bad "nothing kept, but something to go back to"
-fresh
-keep_data mowbite update
+kept_fresh
 echo 2 > /vol/mb/schema
 keep_data mowbite update
 [ -z "$(newer_data mowbite)" ] || bad "the copy before the last update isn't the one that counts"
 
 # --- going back by itself ---
-fresh
-keep_data mowbite update
+kept_fresh
 echo 2 > /vol/mb/schema && echo other > /vol/mb/notify.conf
 status pending_mowbite rb-1 r/mowbite:latest sha256:new
 go_back mowbite rb-1 r/mowbite:latest sha256:new
@@ -319,13 +310,11 @@ go_back mowbite rb-1 r/mowbite:latest sha256:new
   bad "a higher schema: $(get mowbite), $(cat /vol/mb/notify.conf)"
 [ "$(grep -n "^restart mowbite" /fake/calls | cut -d: -f1)" -gt "$(grep -n "^stop mb" /fake/calls | cut -d: -f1)" ] || bad "started before its data was back"
 [ -z "$(get pending_mowbite)" ] && [ "$(get mowbite_failed)" = sha256:new ] || bad "pending $(get pending_mowbite), left out $(get mowbite_failed)"
-fresh
-keep_data mowbite update
+kept_fresh
 echo other > /vol/mb/notify.conf
 go_back mowbite rb-1 r/mowbite:latest sha256:new
 [ "$(get mowbite)" = rolled_back ] && [ "$(cat /vol/mb/notify.conf)" = other ] && ! called "^stop" || bad "the same schema: $(get mowbite)"
-fresh
-keep_data mowbite update
+kept_fresh
 echo 2 > /vol/mb/schema && echo x >> "$kept/1.tar"
 go_back mowbite rb-1 r/mowbite:latest sha256:new
 [ "$(get mowbite)" = "error data_put" ] && called "^restart mowbite" || bad "its data not back: $(get mowbite)"
@@ -362,6 +351,11 @@ put_by_hand mowbite "$t"
 [ "$(get mowbite | cut -d' ' -f1,3)" = "data_back $t" ] && [ "$(cat /vol/mb/notify.conf)" = token ] && called "^restart mowbite" && called "^unhold" ||
   bad "by hand: $(get mowbite)"
 ! grep -q "doesn't answer" /st/log || bad "it answered, but the log says it doesn't"
+echo exited > /fake/c/mb/status
+: > /fake/calls
+put_by_hand mowbite "$t"
+[ "$(get mowbite | cut -d' ' -f1)" = data_back ] && ! called "^restart" || bad "a stopped part started after its data was put back"
+echo running > /fake/c/mb/status
 : > /fake/fail_put
 : > /fake/calls
 put_by_hand mowbite "$t"
@@ -373,9 +367,7 @@ put_by_hand mowbite "$t"
 [ "$(get mowbite)" = "error data_put" ] && ! called "^restart" && called "^unhold" || bad "a changed copy by hand: $(get mowbite)"
 
 # --- stopped halfway ---
-fresh
-keep_data mowbite update
-d=$kept
+kept_fresh
 keep_data mowbite put "$d"
 echo other > /vol/mb/notify.conf && mkdir /vol/mb/.updater-put && echo half > /vol/mb/.updater-put/x
 echo exited > /fake/c/mb/status
@@ -384,8 +376,7 @@ status data_put mowbite "$d" "$kept"
 recover
 [ "$(cat /vol/mb/notify.conf)" = token ] && [ ! -e /vol/mb/.updater-put ] && [ -z "$(get data_put)" ] && called "^restart mowbite" ||
   bad "put back halfway: $(cat /vol/mb/notify.conf), $(get data_put)"
-fresh
-keep_data mowbite update
+kept_fresh
 echo other > /vol/mb/notify.conf
 echo exited > /fake/c/mb/status
 status data_put mowbite "$kept"
@@ -393,16 +384,14 @@ status data_put mowbite "$kept"
 recover
 [ "$(cat /vol/mb/notify.conf)" = other ] && [ -z "$(get data_put)" ] && called "^restart mowbite" && ! called "^stop" ||
   bad "stopped before what it had was kept: $(cat /vol/mb/notify.conf)"
-fresh
-keep_data mowbite update
+kept_fresh
 echo exited > /fake/c/mb/status
 status data_put mowbite "$kept" "$kept"
 status pending_mowbite rb-1 r/mowbite:latest sha256:new
 : > /fake/calls
 recover
 ! called "^restart" || bad "started though it waits to be seen running"
-fresh
-keep_data mowbite update
+kept_fresh
 : > /fake/fail_put
 status data_put mowbite "$kept" "$kept"
 recover

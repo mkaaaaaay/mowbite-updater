@@ -30,8 +30,11 @@ CONF=$STATE/conf
 STATUS=$STATE/status
 LOG=$STATE/log
 REQ=$STATE/request
+# the data kept before updates, on the mower only (mower_params.yaml has the ntrip login)
+DATA=$STATE/data
 
 now() { date +%s; }
+up() { cut -d. -f1 /proc/uptime; }
 log() {
   local tmp
   echo "$(date '+%F %T') $*" >> "$LOG"
@@ -148,3 +151,12 @@ om_channel() {
   echo "${v:-edge}"
 }
 auto() { [ "$(conf "$1_auto" 0)" = 1 ]; }
+# the folders of the data kept, of part $1 or of all, newest first. $2: only those kept before an update (update) or
+# before data was put back (put)
+data_dirs() {
+  local d
+  printf '%s\n' "$DATA"/*-* | grep -E "/${1:-$ID}-[0-9]+\$" | awk -F- '{print $NF, $0}' | sort -nr |
+    cut -d' ' -f2- | while IFS= read -r d; do
+      [ -z "$2" ] || [ "$(cat "$d/why" 2> /dev/null)" = "$2" ] && echo "$d"
+    done
+}

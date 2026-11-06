@@ -25,17 +25,18 @@ fi
 answers() {
   docker exec "$ME" sh -c 'wget -q -T 5 -O - "http://127.0.0.1:${PORT:-8083}/cgi-bin/updater"' 2> /dev/null | grep -qF "\"started\":\"$1 $new\""
 }
-end=$(($(cut -d. -f1 /proc/uptime) + 180))
-while [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ]; do
+state() { docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$ME" 2>/dev/null; }
+end=$(($(up) + 180))
+while [ "$(up)" -lt "$end" ]; do
   sleep 5
   # (started: its time and its image, written as it starts)
   # shellcheck disable=SC2046
   set -- $(get started)
-  began=$(docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$ME" 2>/dev/null)
+  began=$(state)
   [ "$2" = "$new" ] && [ "${began%% *}" = true ] && [ "${began#* }" != "$was" ] || continue
   # (no crash loop, and its interface works: the same start all along, its page says it)
   ok=0
-  while [ $ok -lt 9 ] && [ "$(docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$ME" 2>/dev/null)" = "$began" ] && answers "$1"; do
+  while [ $ok -lt 9 ] && [ "$(state)" = "$began" ] && answers "$1"; do
     ok=$((ok + 1))
     sleep 5
   done

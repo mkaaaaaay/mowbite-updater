@@ -363,10 +363,12 @@ function taken() {
 const working = () => asked || (!!st && (st.requested || taken().what.length > 0 || running() || !!restarting()));
 // (shown in another page or without an answer: nothing to change from here)
 const busy = () => locked || lost() || working();
+// a request as the updater notes it when it takes it ("now:<part>", "data:<part>", "free", ...)
+const wordOf = (query) => query.replace(/^now$/, 'now:all').replace('=', ':').replace(/^free:.*/, 'free').replace(/^(data:.*)-\d+$/, '$1');
 // since when this was asked (on this page or taken by the updater), null when it wasn't: "now:<part>", "now:all",
 // "back:<part>", "data:<part>", "self", "room", "free", "check"
 function askedSince(what) {
-  const word = askedFor.replace(/^now$/, 'now:all').replace('=', ':').replace(/^free:.*/, 'free').replace(/^(data:.*)-\d+$/, '$1');
+  const word = wordOf(askedFor);
   if (asked && word === what) return askedAt / 1000;
   const t = taken();
   if (t.what.some((w) => (w.startsWith('free:') ? 'free' : w) === what)) return t.since;
@@ -422,7 +424,7 @@ async function post(query, body) {
 function whereOf(query) {
   const [k, v] = query.split('=');
   if ((k === 'now' || k === 'back') && v) return v;
-  if (k === 'data' && v) return v.replace(/-\d+$/, '');
+  if (k === 'data' && v) return wordOf(query).slice('data:'.length);
   if (k === 'self') return 'updater';
   if (k === 'room' || k === 'free') return 'room';
   if (k === 'containers' || k === 'logs' || k === 'restart') return 'containers';
@@ -893,6 +895,10 @@ function fold(key, force, auto, name, sub, ...body) {
     h('div', {class: 'foldBody'}, body));
 }
 const openMore = new Set();
+// what's folded away in a part's card, open as it was left
+const more = (key, label, ...body) => h('details', {class: 'more', open: openMore.has(key), ontoggle: (e) => (e.target.open ? openMore.add(key) : openMore.delete(key))},
+  h('summary', {'data-key': 'more:' + key}, tr(label)),
+  h('div', {class: 'moreBody'}, body));
 
 // a part asked for that isn't on its bar yet: from the tap on, so something moves at once. in a run before its first
 // step only the first one (the others are in line), the time since it was asked when known
@@ -1033,14 +1039,10 @@ function partCard(p) {
     !fixed && h('label', {class: 'check'},
       h('input', {type: 'checkbox', 'data-key': 'auto:' + id, checked: auto, onchange: (e) => setConf({[id + '_auto']: e.target.checked ? 1 : 0})}),
       tr('Automatically at night ({when})', {when: tickText()})),
-    inside.length > 0 && h('details', {class: 'more', open: openMore.has(id), ontoggle: (e) => (e.target.open ? openMore.add(id) : openMore.delete(id))},
-      h('summary', {'data-key': 'more:' + id}, tr(label)),
-      h('div', {class: 'moreBody'}, inside)),
-    kept.length > 0 && h('details', {class: 'more', open: openMore.has('data:' + id), ontoggle: (e) => (e.target.open ? openMore.add('data:' + id) : openMore.delete('data:' + id))},
-      h('summary', {'data-key': 'moredata:' + id}, tr('Data kept')),
-      h('div', {class: 'moreBody'},
-        dim(tr("Before each update the updater keeps a copy of this part's data on the mower, the newest two. Putting one back stops it, keeps what it has now first and starts it again, only with the mower ready in the dock.")),
-        kept)),
+    inside.length > 0 && more(id, label, inside),
+    kept.length > 0 && more('data:' + id, 'Data kept',
+      dim(tr("Before each update the updater keeps a copy of this part's data on the mower, the newest two. Putting one back stops it, keeps what it has now first and starts it again, only with the mower ready in the dock.")),
+      kept),
   );
 }
 // the pieces of a copy of data in words

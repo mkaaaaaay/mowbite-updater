@@ -7,12 +7,13 @@
 #   data.sh put <n> <piece>    /b/<n>.tar unpacked next to the piece and checked against /b/<n>.sums (a copy cut
 #                              short unpacks without a word), moved over it, then read again against them. done
 #                              again from the start it ends the same (a stop halfway)
-#   data.sh schema <piece>     the number in the piece's schema file, 1 without one (the format before it had one)
+#   data.sh schema <n> <piece> the number in the piece's schema file, 1 without one (the format before it had one)
 set -u
 # (unpacked here first: on the same disk, so it's moved over and not copied)
 STAGE=.updater-put
 what=${1:-}
-if [ "$what" = schema ]; then n=0 piece=${2:-}; else n=${2:-} piece=${3:-}; fi
+n=${2:-}
+piece=${3:-}
 case $n in '' | *[!0-9]*) echo "data.sh: no number" >&2; exit 1 ;; esac
 case $piece in '' | .. | -* | */*) echo "data.sh: no piece" >&2; exit 1 ;; esac
 cd /s || exit 1

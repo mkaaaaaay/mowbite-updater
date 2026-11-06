@@ -44,7 +44,6 @@ outcome() {
   status "${1}_at" "$(now)"
 }
 # seconds since the machine started: a wait that a clock set by ntp meanwhile doesn't cut short or stretch
-up() { cut -d. -f1 /proc/uptime; }
 
 # --- the mower ---
 
@@ -553,23 +552,16 @@ drop_tag() {
 KEEP_DATA=2
 ROOM_DATA=100
 # what a part mounts at $2: a volume's name or the host's path
-mount_at() {
-  docker inspect -f '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}{{else}}{{.Source}}{{end}}|{{.Destination}}{{println}}{{end}}' "$1" 2> /dev/null |
-    awk -F'|' -v d="$2" '$2 == d {print $1; exit}'
-}
+mounts() { docker inspect -f '{{range .Mounts}}{{.Type}}|{{if eq .Type "volume"}}{{.Name}}{{else}}{{.Source}}{{end}}|{{.Destination}}|{{.RW}}{{println}}{{end}}' "$1" 2> /dev/null; }
+mount_at() { mounts "$1" | awk -F'|' -v d="$2" -v p="$3" '$3 == d && $2 != "" {print $2 "|" p; exit}'; }
 # the data of part $1, "<what to mount>|<path in it>" a line: OpenMower its map and mower_params.yaml, MowBite its /data
 data_of() {
-  local m
   case $1 in
   openmower)
-    m=$(mount_at "$OM" /data/ros)
-    [ -n "$m" ] && echo "$m|map.json"
+    mount_at "$OM" /data/ros map.json
     calib_where
     ;;
-  mowbite)
-    m=$(mount_at "$(box mowbite)" /data)
-    [ -n "$m" ] && echo "$m|."
-    ;;
+  mowbite) mount_at "$(box mowbite)" /data . ;;
   esac
 }
 # data.sh in a helper of its own image without network: $1 "<what to mount>|<piece>" at /s (read-only, but to put
@@ -579,36 +571,23 @@ data_run() {
   [ "$what" = put ] && mode=rw && at=/b:ro
   # shellcheck disable=SC2086
   docker run --rm --network none --pull never -v "${w%|*}:/s:$mode" ${dir:+-v "$dir:$at"} --entrypoint sh "$(image_of "$ME")" \
-    /data.sh "$what" $n "${w##*|}"
-}
-# the folders of part $1's data kept, newest first. $2: only those kept before an update (update) or before data was
-# put back (put)
-data_dirs() {
-  local d
-  for d in "$STATE/data/$1-"*; do printf '%s\n' "$d"; done | grep -E "/$1-[0-9]+\$" | awk -F- '{print $NF, $0}' | sort -nr |
-    cut -d' ' -f2- | while IFS= read -r d; do
-      [ -z "$2" ] || [ "$(cat "$d/why" 2> /dev/null)" = "$2" ] && echo "$d"
-    done
+    /data.sh "$what" "$n" "${w##*|}"
 }
 # part $1's data before an update or before data is put back ($2: update or put): each piece as a tar read by a helper
 # of its own image that sees it read-only, with what it holds and the sha256 of all of it. the folder gets its name
 # only once all of it is there ($kept then). of each part the newest two stay, and the one about to be put back ($3).
 # 1 when it has data that can't be kept
 keep_data() {
-  local list dir tmp i=0 w
+  local list dir tmp i=0 w bad=
   kept=
   list=$(data_of "$1")
   [ -n "$list" ] || return 0
   room_for "$ROOM_DATA" || { log "$1: not enough room to keep its data ($(free_mb) MB free)"; return 1; }
-  dir=$STATE/data/$1-$(now)
   # (a second one within the same second)
-  while [ -e "$dir" ]; do
-    sleep 1
-    dir=$STATE/data/$1-$(now)
-  done
+  while dir=$DATA/$1-$(now) && [ -e "$dir" ]; do sleep 1; done
   tmp=$dir.new
-  rm -rf "$STATE/data/$1-"*.new
-  mkdir -p "$STATE/data" && chmod 700 "$STATE/data" && mkdir -m 700 "$tmp" && echo "$2" > "$tmp/why" || return 1
+  rm -rf "$DATA/$1-"*.new
+  mkdir -p "$DATA" && chmod 700 "$DATA" && mkdir -m 700 "$tmp" && echo "$2" > "$tmp/why" || return 1
   # (a path that isn't there, a map not saved yet: nothing to keep of it)
   while IFS= read -r w; do
     i=$((i + 1))
@@ -616,31 +595,29 @@ keep_data() {
     case $? in
     0) printf '%s %s\n' "$i" "$w" >> "$tmp/what" ;;
     3) ;;
-    *) i=x && break ;;
+    *) bad=1 && break ;;
     esac
   done << EOF
 $list
 EOF
-  if [ "$i" != x ] && { [ ! -s "$tmp/what" ] || { (cd "$tmp" && sha256sum -- *.tar > sha256) && sync && mv "$tmp" "$dir"; }; }; then
-    rm -rf "$tmp"
-    [ -d "$dir" ] && kept=$dir && log "$1: its data kept in $dir"
-    data_dirs "$1" | awk -v k=$KEEP_DATA -v s="$3" 'NR > k && $0 != s' | while IFS= read -r w; do rm -rf "$w"; done
-    return 0
-  fi
+  [ -z "$bad" ] && [ -s "$tmp/what" ] && { (cd "$tmp" && sha256sum -- *.tar > sha256) && sync && mv "$tmp" "$dir" && kept=$dir || bad=1; }
   rm -rf "$tmp"
-  log "$1: its data can't be kept"
-  return 1
+  [ -z "$bad" ] || { log "$1: its data can't be kept"; return 1; }
+  [ -z "$kept" ] || log "$1: its data kept in $dir"
+  data_dirs "$1" | awk -v k=$KEEP_DATA -v s="$3" 'NR > k && $0 != s' | while IFS= read -r w; do rm -rf "$w"; done
+  return 0
 }
 # part $1's data back from the folder $2: the copy checked against its sha256, the part stopped, what it has now kept
 # first (nothing goes without a copy), then each piece unpacked next to it and moved over it and read again against
 # what was kept. the part isn't started again here. a stop halfway is done again at the next start (data_put). 1 when
 # it can't: before anything changed, or the log says what went wrong
 put_data() {
-  local p="$1" dir="$2" n w
+  local p="$1" dir="$2" n w mounted
   [ -s "$dir/what" ] && (cd "$dir" && sha256sum -c -s sha256) || { log "$p: the data kept in $dir doesn't match its sha256, nothing put back"; return 1; }
   # (only where it was kept from: the part still mounts it there)
+  mounted=$(data_of "$p")
   while read -r n w; do
-    data_of "$p" | grep -qxF -- "$w" || { log "$p: it doesn't mount ${w%|*} any more, nothing put back"; return 1; }
+    printf '%s\n' "$mounted" | grep -qxF -- "$w" || { log "$p: it doesn't mount ${w%|*} any more, nothing put back"; return 1; }
   done < "$dir/what"
   room_for $(($(du -sm "$dir" | cut -f1) + ROOM_DATA)) || { log "$p: not enough room to put its data back ($(free_mb) MB free)"; return 1; }
   status data_put "$p" "$dir"
@@ -675,10 +652,9 @@ newer_data() {
   d=$(data_dirs "$1" update | head -n1)
   [ -n "$d" ] || return 1
   while read -r n w; do
-    [ -f "$d/$n.schema" ] || continue
-    was=$(grep -x '[0-9][0-9]*' "$d/$n.schema")
-    is=$(data_run "$w" schema 2> /dev/null | grep -x '[0-9][0-9]*')
-    if [ -n "$was" ] && [ -n "$is" ] && [ "$is" -gt "$was" ]; then
+    was=$(grep -x '[0-9][0-9]*' "$d/$n.schema" 2> /dev/null) || continue
+    is=$(data_run "$w" schema "$n" 2> /dev/null | grep -x '[0-9][0-9]*')
+    if [ -n "$is" ] && [ "$is" -gt "$was" ]; then
       log "$1: the format of its data went from $was to $is"
       echo "$d"
       return 0
@@ -686,10 +662,12 @@ newer_data() {
   done < "$d/what"
   return 1
 }
+# a part started again on the image it has
+restart_same() { restart "$1" "$(image_of "$(box "$1")")"; }
 # by hand from its page: part $1's data kept at $2 back, idle in the dock with MowBite's schedule held (not in the 30
 # minutes before it may start the mower), the part started again on what it ran
 put_by_hand() {
-  local p="$1" dir="$STATE/data/$1-$2" at
+  local p="$1" dir="$DATA/$1-$2" at ran=
   [ -d "$dir" ] || { log "$p: no data kept at $2"; outcome "$p" error no_data; return 1; }
   if at=$(soon); then
     log "$p: MowBite's schedule may start the mower at $(date -d "@$at" '+%F %T'), its data isn't put back until then"
@@ -703,11 +681,13 @@ put_by_hand() {
     outcome "$p" error not_docked
     return 1
   fi
+  # (one that was stopped stays so)
+  running "$(box "$p")" && ran=1
   if put_data "$p" "$dir"; then
-    restart "$p" "$(image_of "$(box "$p")")" || log "$p: doesn't answer after its data was put back"
+    [ -z "$ran" ] || restart_same "$p" || log "$p: doesn't answer after its data was put back"
     outcome "$p" data_back "$(now)" "$2"
   else
-    running "$(box "$p")" || restart "$p" "$(image_of "$(box "$p")")"
+    [ -z "$ran" ] || running "$(box "$p")" || restart_same "$p"
     outcome "$p" error data_put
   fi
   unhold
@@ -1468,6 +1448,7 @@ update_openmower() {
   d=$(id_of "$target")
   # (left out when it doesn't run: its id and the digests it came with, the tag may have moved on since it was looked at)
   pd=$(digests_in "$d" "$repo")
+  pd=${pd:-$remote}
   # (the motors kept off for the firmware already: not the new version's doing)
   if fw_blocked; then
     log "openmower: the motors are off for the firmware already, the new version isn't checked for it"
@@ -1476,7 +1457,7 @@ update_openmower() {
     status openmower_fw_check on
   fi
   # shellcheck disable=SC2086
-  status pending_openmower "$back" "$ref" "$d" "$d" ${pd:-$remote}
+  status pending_openmower "$back" "$ref" "$d" "$d" $pd
   # (from here its .env keeps the version that ran, for the way back)
   status openmower_saved
   if restart openmower "$d"; then
@@ -1494,7 +1475,7 @@ update_openmower() {
     rebuild_on_om "$target" new
     return
   fi
-  go_back openmower "$back" "$ref" "$d ${pd:-$remote}"
+  go_back openmower "$back" "$ref" "$d $pd"
   rc=$?
   unhold
   [ $rc -eq 0 ] || return 1
@@ -1567,7 +1548,7 @@ back_openmower() {
 # it's read-only
 calib_where() {
   [ "$(kind openmower)" = openmower ] && exists "$OM" || return 1
-  docker inspect -f '{{range .Mounts}}{{.Type}}|{{if eq .Type "volume"}}{{.Name}}{{else}}{{.Source}}{{end}}|{{.Destination}}|{{.RW}}{{println}}{{end}}' "$OM" 2> /dev/null |
+  mounts "$OM" |
     awk -F'|' '
       $4 != "true" { next }
       $3 == "/data/params" { print $2 "|mower_params.yaml"; found = 1; exit }
@@ -1964,7 +1945,7 @@ recover() {
     else
       status data_put
     fi
-    [ -n "$(get "pending_$1")" ] || running "$(box "$1")" || restart "$1" "$(image_of "$(box "$1")")"
+    [ -n "$(get "pending_$1")" ] || running "$(box "$1")" || restart_same "$1"
   fi
   [ "$(get result)" = running ] || return 0
   log "the last run was stopped halfway, putting back what didn't run yet"
@@ -2523,6 +2504,23 @@ run() {
   [ -z "$waited" ] || return 2
 }
 
+# one thing asked for a part on its own ($1), on its page like a run of that part: what $2... does
+alone() {
+  status run_parts "$1"
+  status result running
+  status taken
+  shift
+  "$@"
+  status progress
+  status run_parts
+  status result "done"
+}
+# a part back to the version before, by hand
+back_part() {
+  if [ "$1" = openmower ]; then back_openmower; else back_image "$1"; fi
+  unhold
+}
+
 # the parts set to update by themselves
 auto_parts() {
   local p
@@ -2635,14 +2633,7 @@ while :; do
         case $(kind "$a") in
         image | openmower)
           if [ "$(gate "$a")" = none ] || docked; then
-            status run_parts "$a"
-            status result running
-            status taken
-            if [ "$a" = openmower ]; then back_openmower; else back_image "$a"; fi
-            unhold
-            status progress
-            status run_parts
-            status result "done"
+            alone "$a" back_part "$a"
             # (the leftovers as after a run: a build made anew on it keeps the one before until then)
             tidy
             check_all
@@ -2656,13 +2647,7 @@ while :; do
       # (a part's data kept at $b back, idle in the dock like an update)
       data)
         if docked; then
-          status run_parts "$a"
-          status result running
-          status taken
-          put_by_hand "$a" "$b"
-          status progress
-          status run_parts
-          status result "done"
+          alone "$a" put_by_hand "$a" "$b"
         else
           log "$a: its data isn't put back, the mower isn't idle in the dock"
           outcome "$a" error not_docked
