@@ -4,13 +4,13 @@
 #   POST ?conf          lines "<key> <value>", each checked, the ones left out stay as they are: <part> (its channel:
 #                       beta or stable, OpenMower's tag), <part>_auto (0 or 1), at (HH:MM), days (daily or 1-7, commas),
 #                       picked (containers looked after besides the known and labelled ones, commas, or none)
-#   POST ?now[=<part>]  update all parts (and itself, last) or one within the next minute
+#   POST ?now[=<part>]  update all parts (itself first) or one within the next minute
 #   POST ?back=<part>   a part from a registry back to the version before (OpenMower: the one before its last update,
 #                       from its registry again)
 #   POST ?data=<part>-<unix> a part's data kept at that time (before an update, or before data was put back) back
 #                       within the next minute, idle in the dock, what it has now kept first. the copies themselves
 #                       stay on the mower, never handed out here (mower_params.yaml has the ntrip login)
-#   POST ?self          the updater itself to its newest version within the next minute (with ?now: last)
+#   POST ?self          the updater itself to its newest version within the next minute (with ?now: first)
 #   POST ?check         look within the next minute whether there's something new
 #   POST ?calib         lines "<path> <value>": a calibration written into OpenMower's mower_params.yaml within the next
 #                       minute, idle in the dock (waits up to 30 minutes for it), OpenMower started again on it. only the

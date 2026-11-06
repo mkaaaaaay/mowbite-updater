@@ -137,8 +137,8 @@ const DE = {
   'Not to be updated here any more?': 'Nicht mehr mit aktualisieren?',
   'Take out': 'Herausnehmen',
   'Really take out?': 'Wirklich herausnehmen?',
-  'It updates itself too, after the automatic updates at night.': 'Er aktualisiert sich auch selbst, nach den automatischen Updates in der Nacht.',
-  'Comes last, the page then loads again by itself.': 'Kommt zum Schluss dran, danach lädt die Seite von selbst neu.',
+  'It updates itself too, at night before the automatic updates.': 'Er aktualisiert sich auch selbst, nachts vor den automatischen Updates.',
+  'Comes first, the page then loads again by itself and the apps follow.': 'Kommt zuerst dran, danach lädt die Seite von selbst neu und die Apps folgen.',
   'Restarting the updater, the page comes back by itself': 'Der Updater startet neu, die Seite kommt von selbst wieder',
   'Open the log': 'Protokoll öffnen',
   // the bars
@@ -1083,13 +1083,13 @@ function selfCard() {
     !since && bars('updater'),
     since && bar({part: 'updater', step: 'restart', pct: null, since}),
     since && dim(tr('Restarting the updater, the page comes back by itself')),
-    // (with all the others: last, after them)
+    // (with all the others: first, before them)
     !since && !mine && askedFor === 'now' && (running() || askedSince('now:all') !== null) && avail('updater') === 'yes' &&
-      dim(tr('Comes last, the page then loads again by itself.')),
+      dim(tr('Comes first, the page then loads again by itself and the apps follow.')),
     failedHere('updater'),
     resultLine(p),
     avail('updater') === 'local' && dim(tr("This version was built on its own, it isn't the official one.")),
-    PARTS().some((x) => autoOn(x.id)) && dim(tr('It updates itself too, after the automatic updates at night.')),
+    PARTS().some((x) => autoOn(x.id)) && dim(tr('It updates itself too, at night before the automatic updates.')),
     S('mower') !== '1' && dim(tr('Updates also with the mower out of the dock.')),
     actButton(p),
   );

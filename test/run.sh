@@ -235,8 +235,8 @@ gh_releases() {
 # a tag in the registry moved to the image of another, nothing changed here (as on a mower: only the updater pulls)
 move() { docker buildx imagetools create -t "$REG/$P-$1:$2" "$REG/$P-$1:$3" > /dev/null 2>&1; }
 publish() { move app latest "$1"; }
-# the updater built from this checkout (<tag> <revision>), or on top of that build (<tag> <revision> broken|label, and
-# for label a release's version as a fourth)
+# the updater built from this checkout (<tag> <revision>), or on top of that build (<tag> <revision> broken|label|mute:
+# one that doesn't start, one with a release's version as a fourth, one that runs without its page)
 updater_img() {
   # (the new version b is the image in MBT_IMAGE when it's set, the one the ci ships, with the test's labels on it)
   if [ -z "${3:-}" ] && { [ -z "${MBT_IMAGE:-}" ] || [ "$1" != b ]; }; then
@@ -249,6 +249,7 @@ updater_img() {
       echo "LABEL mbt.run=$P org.opencontainers.image.revision=$2"
       [ -n "${4:-}" ] && echo "LABEL org.opencontainers.image.version=$4"
       [ "${3:-}" = broken ] && echo 'ENTRYPOINT ["sh", "-c", "exit 1"]'
+      [ "${3:-}" = mute ] && echo 'RUN rm /usr/sbin/httpd'
     } > "$dir/Dockerfile"
     docker build -q -t "$REG/$P-updater:$1" "$dir" > /dev/null
   fi && docker push -q "$REG/$P-updater:$1" > /dev/null
@@ -1194,16 +1195,19 @@ sleep 5
 mower out
 post conf "days $wd" > /dev/null
 post room > /dev/null
-until_true "s.get('updater', '').startswith('restarting')" 300 && ok "with the mower out it waits, and updates itself meanwhile" ||
-  bad "itself at night: $(val "s.get('updater')"), result $(val "s.get('result')")"
-mower docked
+until_true "s.get('updater', '').startswith('restarting')" 300 && [ "$(log_has 'waiting (night)')" = False ] &&
+  ok "itself first, also with the mower out" || bad "itself at night: $(val "s.get('updater')"), result $(val "s.get('result')")"
 until_true "s.get('updater', '').startswith('updated') and 'b200000' in s.get('updater_running', '')" 300 && ok "its new version runs" ||
   bad "itself: $(val "s.get('updater')") $(val "s.get('updater_running')")"
 [ "$(val "s.get('updater_release')")" = v9.8.7 ] && ok "its card shows its release" ||
   bad "its release: $(val "s.get('updater_release')")"
+until_true "any('waiting (night)' in l for l in d.get('log', []))" 300 && [ "$(val "s.get('night_done')")" != "$DAY" ] &&
+  ok "its new version runs the night, it waits for the dock" || bad "the night with the mower out: $(val "s.get('result')")"
+# (it looks again in 10 minutes: started again in its window it doesn't wait for that)
+mower docked
+docker restart -t 1 "$P-updater" > /dev/null
 until_true "s.get('night_done') == '$DAY' and s.get('result') != 'running'" 420 && ok "the mower back, the night's run" ||
   bad "the night: $(val "s.get('night_done')"), result $(val "s.get('result')")"
-[ "$(log_has 'waiting (night)')" = True ] && ok "it had waited" || bad "its log doesn't say it waited"
 runs_on "$P-om" "$REG/$P-om:o7" && runs_on "$P-app3" "$REG/$P-app:a3n1" && ok "OpenMower and the app updated" ||
   bad "OpenMower $(val "s.get('openmower')"), the app $(val "s.get('$APP3')")"
 [ "$(said planner)" = updated ] && [ "$(val "s.get('planner_base_id')")" = "$(id_of "$REG/$P-om:o7")" ] &&
@@ -1420,6 +1424,41 @@ until_true "int(s.get('${APP3}_at', 0)) >= int(s.get('updater_at', 0)) and s.get
 post self > /dev/null
 until_true "s.get('updater', '').startswith('skipped_failed')" 60 && ok "not tried again" || bad "itself again: $(val "s.get('updater')")"
 [ "$(docker inspect -f '{{.State.Running}}' "$P-updater" 2> /dev/null)" = true ] && ok "and it runs" || bad "the updater doesn't run any more"
+updater_img e e000000test mute && move updater latest e && forget updater:e
+t0=$(date +%s)
+post self > /dev/null
+until_true "s.get('updater', '').startswith('rolled_back') and int(s.get('updater_at', 0)) >= $t0 and 'b200000' in s.get('updater_running', '')" 420 &&
+  [ "$(log_has "didn't come up or didn't answer")" = True ] && ok "a version of itself that runs but doesn't answer its page: back on the one before" ||
+  bad "one without its page: $(val "s.get('updater')") $(val "s.get('updater_running')")"
+
+say "update all: itself first"
+updater_img d d000000test label && move updater latest d
+publish v4
+post now > /dev/null
+until_true "s.get('updater', '').startswith('updated') and 'd000000' in s.get('updater_running', '')" 420 && ok "itself first, its new version runs" ||
+  bad "itself: $(val "s.get('updater')") $(val "s.get('updater_running')")"
+until_true "s.get('$APP', '').startswith('updated') and int(s.get('${APP}_at', 0)) >= int((s.get('updater', '') + ' 0 0').split(' ')[1]) and s.get('result') != 'running'" 420 &&
+  runs_on "$P-app" "$REG/$P-app:v4" && ok "then the apps, by its new version" ||
+  bad "the app: $(val "s.get('$APP')") at $(val "s.get('${APP}_at')"), the updater $(val "s.get('updater')")"
+[ -z "$(val "s.get('after_self')")" ] && ok "nothing left waiting for it" || bad "still waiting: $(val "s.get('after_self')")"
+
+say "what a pull by its digest leaves"
+# (what OpenMower's way back leaves once its tag moved on: an image with only the digest it was pulled by. prune leaves
+# it with containerd, one a container runs on stays)
+img app dg run && img app dg2 run || bad "app:dg doesn't build"
+dg=$(docker buildx imagetools inspect "$REG/$P-app:dg" --format '{{.Manifest.Digest}}' 2> /dev/null)
+dg2=$(docker buildx imagetools inspect "$REG/$P-app:dg2" --format '{{.Manifest.Digest}}' 2> /dev/null)
+forget app:dg
+forget app:dg2
+docker pull -q "$REG/$P-app@$dg" > /dev/null && docker pull -q "$REG/$P-app@$dg2" > /dev/null || bad "not pulled by their digests"
+docker run -d --name "$P-pinned" --label "mbt.run=$P" "$REG/$P-app@$dg2" > /dev/null
+t0=$(date +%s)
+post "now=$APP" > /dev/null
+until_true "int(s.get('${APP}_at', 0)) >= $t0 and s.get('result') != 'running' and not s.get('taken')" 180
+until_sh '! docker image inspect "$REG/$P-app@$dg" > /dev/null 2>&1' 60 && ok "one with only its digest and nothing on it: gone after the run" ||
+  bad "still there: $REG/$P-app@$dg"
+docker image inspect "$REG/$P-app@$dg2" > /dev/null 2>&1 && ok "one a container runs on stays" || bad "the one a container runs on is gone"
+docker rm -f "$P-pinned" > /dev/null
 
 say "making room: all of it but the ways back"
 dir=$WORK/img/junk2

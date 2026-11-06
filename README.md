@@ -19,9 +19,9 @@ by itself.
 - Checks there's enough free space first and cleans up old versions afterwards.
 - Shows what it does from the moment you tap: a progress bar while it gets ready, downloads and restarts an app, and
   while it checks for updates.
-- Keeps itself up to date too: "Update" on its own card, or at night after the automatic updates, also when the mower
-  isn't in the dock (its own update doesn't touch the mower). If its new version doesn't come up, the one before starts
-  again.
+- Keeps itself up to date too, first: "Update" on its own card or "Update all", and at night before the automatic
+  updates, also when the mower isn't in the dock (its own update doesn't touch the mower). Its newest version then
+  updates the apps. If its new version doesn't come up and answer for 45 seconds, the one before starts again.
 
 ## Install
 
@@ -122,7 +122,7 @@ Without a check it waits for Docker's own health check, or else half a minute wi
   made-up mower on the machine's own docker (update and back, a version that doesn't start, the mower leaving the dock,
   a stop halfway, a request while it checks, picked apps, stable, OpenMower and the planner built on it, data kept and
   put back, also with the disk full or a stop halfway, the night, no answer from the registry, making room, builds,
-  itself).
+  itself first, a new version of itself that runs but doesn't answer).
 
 <details>
 <summary>Settings (environment)</summary>
@@ -156,7 +156,7 @@ network.
   while it looks for updates
 - `POST /cgi-bin/updater?conf` with lines like `openmower edge`, `mowbite stable`, `mowbite_auto 1`, `at 03:00`,
   `days daily` (or `days 1,3,5`, Monday is 1), `picked app1,app2` (or `picked none`). Lines left out stay as they are
-- `POST ?now` (all apps, then itself) or `?now=<app>`, `?self` (only itself), `?back=<app>`, `?data=<app>-<at>`
+- `POST ?now` (itself first, then all apps) or `?now=<app>`, `?self` (only itself), `?back=<app>`, `?data=<app>-<at>`
   (a copy of its data back), `?check`, `?room`, `?free=img:<id>`, `?free=cache`, `?free=all`. Its own state is in `status` as `updater_running`, `updater_available`
   and `updater`. What came of an app last is `status.<app>`, from when `status.<app>_at` (unix time), the mower's time
   zone `status.clock` (`+0100`)

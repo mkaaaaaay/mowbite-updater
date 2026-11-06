@@ -1,8 +1,8 @@
 #!/bin/sh
 # the updater's own update (updater.sh, update_self): a container of its own on the image the updater ran so far, so it
 # stays while the updater is replaced. $1 the updater's image tag, now on the new image, $2 the tag of the one it ran
-# so far. starts it on the new one and sees it come up (it says so in its status within two minutes), else starts it
-# on the one before again and leaves the new one out
+# so far. starts it on the new one and sees it come up within three minutes: its status says the new start, then 45 s
+# on that same start with its page answering it. else starts it on the one before again and leaves the new one out
 . /lib.sh
 ref=$1
 old=$2
@@ -21,24 +21,31 @@ if ! compose 300 "$ME" up -d --no-deps --pull never "$svc" > /dev/null 2>&1; the
   compose 300 "$ME" up -d --no-deps --pull never "$svc" > /dev/null 2>&1
   exit 1
 fi
-n=0
-while [ $n -lt 24 ]; do
+# (its page asked inside it, on its own port: it answers with that start)
+answers() {
+  docker exec "$ME" sh -c 'wget -q -T 5 -O - "http://127.0.0.1:${PORT:-8083}/cgi-bin/updater"' 2> /dev/null | grep -qF "\"started\":\"$1 $new\""
+}
+end=$(($(cut -d. -f1 /proc/uptime) + 180))
+while [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ]; do
   sleep 5
-  # (started: its time and its image, written as it starts. then still the same start half a minute later: no crash loop)
+  # (started: its time and its image, written as it starts)
   # shellcheck disable=SC2046
   set -- $(get started)
   began=$(docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$ME" 2>/dev/null)
-  if [ "$2" = "$new" ] && [ "${began%% *}" = true ] && [ "${began#* }" != "$was" ]; then
-    sleep 30
-    if [ "$(docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$ME" 2>/dev/null)" = "$began" ]; then
-      log "updater: its new version runs"
-      exit 0
-    fi
+  [ "$2" = "$new" ] && [ "${began%% *}" = true ] && [ "${began#* }" != "$was" ] || continue
+  # (no crash loop, and its interface works: the same start all along, its page says it)
+  ok=0
+  while [ $ok -lt 9 ] && [ "$(docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$ME" 2>/dev/null)" = "$began" ] && answers "$1"; do
+    ok=$((ok + 1))
+    sleep 5
+  done
+  if [ $ok -ge 9 ]; then
+    log "updater: its new version runs and answers"
+    exit 0
   fi
-  n=$((n + 1))
 done
 
-log "updater: its new version didn't come up, back to the one before"
+log "updater: its new version didn't come up or didn't answer, back to the one before"
 # (left out: its id, and each digest its registry knows it by)
 d=$(digests_in "$ref" "$(repo_of "$ref")")
 status updater_failed "$new" ${d:+"$d"}

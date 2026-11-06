@@ -1349,7 +1349,7 @@ rebuild_on_om() {
 }
 
 update_openmower() {
-  local ref repo before old_version want target remote need free back rc prev d at
+  local ref repo before old_version want target remote need free back rc prev d pd at
   [ "$(kind openmower)" = openmower ] || return 0
   progress openmower prepare
   running "$OM" || { log "openmower: not running, left as it is"; outcome openmower stopped; return 0; }
@@ -1466,6 +1466,8 @@ update_openmower() {
   # (its way back by hand: the version before, from its registry again)
   prev=$(prev_of "$before" "$repo")
   d=$(id_of "$target")
+  # (left out when it doesn't run: its id and the digests it came with, the tag may have moved on since it was looked at)
+  pd=$(digests_in "$d" "$repo")
   # (the motors kept off for the firmware already: not the new version's doing)
   if fw_blocked; then
     log "openmower: the motors are off for the firmware already, the new version isn't checked for it"
@@ -1473,7 +1475,8 @@ update_openmower() {
   else
     status openmower_fw_check on
   fi
-  status pending_openmower "$back" "$ref" "$d" "$remote"
+  # shellcheck disable=SC2086
+  status pending_openmower "$back" "$ref" "$d" "$d" ${pd:-$remote}
   # (from here its .env keeps the version that ran, for the way back)
   status openmower_saved
   if restart openmower "$d"; then
@@ -1491,7 +1494,7 @@ update_openmower() {
     rebuild_on_om "$target" new
     return
   fi
-  go_back openmower "$back" "$ref" "$d $remote"
+  go_back openmower "$back" "$ref" "$d ${pd:-$remote}"
   rc=$?
   unhold
   [ $rc -eq 0 ] || return 1
@@ -2034,11 +2037,13 @@ function field(k,    v) {
   v = substr($0, RSTART + length(k) + 4, RLENGTH - length(k) - 5); gsub(/\\u003c/, "<", v); gsub(/\\u003e/, ">", v)
   return v
 }'
+# the images the containers run on, there and stopped
+images_used() { docker ps -aq | xargs -r docker inspect -f '{{.Image}}' 2>/dev/null | tr '\n' ' '; }
 # one line per image: img <id> <bytes> <its tags, comma separated, or -> <kind>, then: cache <bytes> (what clearing it
 # frees: the entries no image shares). the way back of a part not seen running yet isn't listed
 check_room() {
   local df out p only=
-  used=" $(docker ps -aq | xargs -r docker inspect -f '{{.Image}}' 2>/dev/null | tr '\n' ' ') "
+  used=" $(images_used) "
   named=" $(compose_refs | tr '\n' ' ') $(for p in $(part_ids); do get "pending_$p" | cut -d' ' -f1; done | tr '\n' ' ') "
   # (a test on a pc with images and containers of its own: only the ones with this label, TEST_LABEL=<key>=<value>)
   [ -n "${TEST_LABEL:-}" ] && only=" $(docker images -q --no-trunc --filter "label=$TEST_LABEL" | sort -u | tr '\n' ' ') "
@@ -2236,9 +2241,12 @@ restart_box() {
 # big ones: none), newest first by the time in the tag. not while a part waits to be seen running, and never one on an
 # image built here that can't be had again (a build's can: it's built from its source), or while its registry doesn't
 # answer. tags it didn't make stay.
+# then what a pull by its digest left of a part's repository (OpenMower back to the version before): no tag any more,
+# only that digest, and no container on it. prune leaves it with docker's containerd store, it would stay for good.
 # then what nothing uses and the build cache nothing points to
 tidy() {
-  local p keep name repo run kept n seen_before
+  local p keep name repo run kept n seen_before used t dg id
+  used=" $(images_used) "
   for p in $(part_ids); do
     alive
     name=$(box "$p")
@@ -2267,6 +2275,11 @@ tidy() {
         fi
       done
     }
+    docker images --digests --no-trunc --format '{{.Tag}} {{.Digest}} {{.ID}}' "$repo" 2>/dev/null | while read -r t dg id; do
+      [ "$t" = "<none>" ] && [ "$dg" != "<none>" ] || continue
+      case $used in *" $id "*) continue ;; esac
+      docker rmi "$repo@$dg" > /dev/null 2>&1 && log "removed $repo@$dg, nothing uses it any more"
+    done
   done
   # (a test on a pc with images and builds of its own: PRUNE=0)
   if [ "${PRUNE:-1}" != 0 ]; then
@@ -2314,7 +2327,7 @@ update_self() {
     built_here "$(image_of "$ME")"
     [ $? -eq 1 ] || return
   fi
-  # (asked for after the apps: its card shows it's on it)
+  # (asked for: its card shows it's on it)
   [ -n "$1" ] && [ -z "$(get taken)" ] && status taken "$(now)" self
   # nothing downloaded for the version that runs, or one that didn't start before
   remote=$(remote_digest "$me")
@@ -2412,6 +2425,14 @@ update_self() {
 
 # (a request from its page or MowBite is waiting)
 asked() { [ -s "$REQ" ]; }
+# the rest of a request that waited for its own update, asked for again at its start: each part on its own (all of
+# them: itself is done), before its first look (that one stops for it)
+rest_after_self() {
+  local a
+  [ -n "$(get after_self)" ] || return 0
+  for a in $(get after_self); do if [ "$a" = all ]; then part_ids; else echo "$a"; fi; done | sed 's/^/now /' >> "$REQ"
+  status after_self
+}
 # the look whether there's something new, for its page while it lasts (looking). a request that comes in meanwhile
 # goes first: the look stops before its next step and is done again after it (half)
 check_all() {
@@ -2572,8 +2593,9 @@ status looking
 alive
 find_parts
 recover
+rest_after_self
 check_all
-# (the night it ran last, also through a restart in its window: its own update right after it)
+# (the night it ran last, also through a restart in its window: its own update came before it)
 done_day=$(get night_done)
 next=0
 while :; do
@@ -2603,7 +2625,7 @@ while :; do
       check) check=1 ;;
       # (the newest one: pairs "<path> <value>" checked by the interface, or back)
       calib) calib_req="$a${b:+ $b}" ;;
-      # (all: itself too, last)
+      # (all: itself too, first)
       now)
         parts="$parts $a"
         [ "$a" = all ] && self=1
@@ -2655,13 +2677,20 @@ while :; do
     done < "$REQ.$$"
     rm -f "$REQ.$$"
     [ -z "$calib_req" ] || calib "$calib_req"
+    # itself first, its newest version updates the rest: that waits meanwhile (after_self) for the version that runs
+    # next, the new one or this one put back. still here: nothing new of itself, the rest right away
+    if [ -n "$self" ]; then
+      # shellcheck disable=SC2086
+      [ -z "$parts" ] || status after_self $parts
+      update_self manual
+      status after_self
+    fi
     if [ -n "$parts" ]; then
       # shellcheck disable=SC2086
       run request $parts
     elif [ -n "$check" ]; then
       check_all
     fi
-    [ -n "$self" ] && update_self manual
     status taken
   fi
   # a calibration that waits for the dock: tried each round, given up once CALIB_WAIT is over without the dock
@@ -2687,6 +2716,12 @@ while :; do
   last=$(get checked | grep -x '[0-9]*')
   [ "${looked:-0}" -gt "${last:-0}" ] && last=$looked
   if [ -n "$parts" ] && [ $since -lt $WINDOW ] && [ "$done_day" != "$(date -d "@$start" +%F)" ] && day_ok "$start" && [ "$(now)" -ge "$next" ]; then
+    # itself first, once a night, also with the mower out of the dock (its own update doesn't touch the mower): its
+    # newest version runs the night, a new one at its start, the window still open
+    if [ "$(get self_night)" != "$(date -d "@$start" +%F)" ]; then
+      status self_night "$(date -d "@$start" +%F)"
+      update_self
+    fi
     # shellcheck disable=SC2086
     run night $parts
     if [ $? -eq 2 ]; then
@@ -2694,11 +2729,6 @@ while :; do
     else
       done_day=$(date -d "@$start" +%F)
       status night_done "$done_day"
-    fi
-    # itself once a night, also when the mower wasn't in the dock: its own update doesn't touch the mower
-    if [ "$(get self_night)" != "$(date -d "@$start" +%F)" ]; then
-      status self_night "$(date -d "@$start" +%F)"
-      update_self
     fi
   elif [ -n "$half" ] || [ $(($(now) - ${last:-0})) -ge $CHECK_EVERY ]; then
     check_all

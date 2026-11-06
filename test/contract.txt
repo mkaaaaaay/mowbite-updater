@@ -103,6 +103,7 @@ status <part>_running
 status <part>_source
 status <part>_stable
 status <part>_stable_older
+status after_self
 status alive
 status calib
 status calib_backup

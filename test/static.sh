@@ -1,6 +1,6 @@
 #!/bin/sh
 # the checks that need no mower, on every push: shellcheck, the page's javascript, data.sh on its own (test/data.sh),
-# compose.yaml with the image, the name
+# its steps around data and its own update without docker (test/logic.sh), compose.yaml with the image, the name
 # and the port the mowers and MowBite know it by, the contract (test/contract.txt), image.yml only building once the checks, the tests and the commit
 # check passed, and a version's tag, release and names (test/release.sh).
 # (shellcheck and yq come from their images, the same versions here and in the ci)
@@ -11,13 +11,14 @@ ok() { echo "$1 ok"; }
 bad() { echo "$1 FAILED${2:+: $2}"; fail=1; }
 
 if docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:v0.11.0 -s sh -e SC1091,SC3043,SC2034,SC2015,SC2016,SC2153 \
-  /mnt/updater.sh /mnt/lib.sh /mnt/self.sh /mnt/calib.sh /mnt/data.sh /mnt/www/cgi-bin/updater /mnt/www/cgi-bin/index.cgi /mnt/test/run.sh /mnt/test/data.sh /mnt/test/static.sh /mnt/test/contract.sh /mnt/test/release.sh; then
+  /mnt/updater.sh /mnt/lib.sh /mnt/self.sh /mnt/calib.sh /mnt/data.sh /mnt/www/cgi-bin/updater /mnt/www/cgi-bin/index.cgi /mnt/test/run.sh /mnt/test/data.sh /mnt/test/logic.sh /mnt/test/static.sh /mnt/test/contract.sh /mnt/test/release.sh; then
   ok shellcheck
 else
   bad shellcheck
 fi
 if node --check www/app.js; then ok app.js; else bad app.js; fi
 if sh test/data.sh; then ok data.sh; else bad data.sh; fi
+if sh test/logic.sh; then ok logic.sh; else bad logic.sh; fi
 if python3 -c "import ast; ast.parse(open('test/gate.py').read())"; then ok gate.py; else bad gate.py; fi
 if python3 -c "import ast; ast.parse(open('test/github.py').read())"; then ok github.py; else bad github.py; fi
 
