@@ -1446,9 +1446,9 @@ update_openmower() {
   # (its way back by hand: the version before, from its registry again)
   prev=$(prev_of "$before" "$repo")
   d=$(id_of "$target")
-  # (left out when it doesn't run: its id and the digests it came with, the tag may have moved on since it was looked at)
-  pd=$(digests_in "$d" "$repo")
-  pd=${pd:-$remote}
+  # (left out when it doesn't run: its id and the digests it came with, the tag may have moved on since it was looked at.
+  # the registry's own last, openmower_fw goes by it: the classic store lists an image's digests in no fixed order)
+  pd=$(digests_in "$d" "$repo" | tr ' ' '\n' | awk -v r="$remote" 'NF && $0 != r {printf "%s%s", s, $0; s = " "} END {if (r != "") printf "%s%s", s, r}')
   # (the motors kept off for the firmware already: not the new version's doing)
   if fw_blocked; then
     log "openmower: the motors are off for the firmware already, the new version isn't checked for it"
