@@ -84,12 +84,15 @@ chmod 755 /w/s
 mkdir -p /w/n /w/no && echo x > /w/n/x
 at /w/n /w/no
 run keep 1 . && [ ! -e /w/no/1.schema ] || bad "a schema kept that isn't there"
-# (a tar that can't be unpacked: nothing changed)
+# (a tar cut short, in a header or in a file, unpacked with or without an error: nothing changed)
 at /w/s /w/o
 before=$(look /w/s)
-cp /w/o/1.tar /w/o/1.tar.ok && head -c 1500 /w/o/1.tar.ok > /w/o/1.tar
-run put 1 . 2> /dev/null && bad "a broken tar put back"
-[ "$(look /w/s)" = "$before" ] || bad "a broken tar changed something"
+cp /w/o/1.tar /w/o/1.tar.ok
+for c in 700 1000 1500 2000 2600; do
+  head -c $c /w/o/1.tar.ok > /w/o/1.tar
+  run put 1 . 2> /dev/null && bad "a tar cut at $c put back"
+  [ "$(look /w/s)" = "$before" ] || bad "a tar cut at $c changed something"
+done
 mv /w/o/1.tar.ok /w/o/1.tar
 # (a folder where the file was: the file moved into it, seen afterwards)
 at /w/f /w/fo

@@ -46,7 +46,8 @@ keep)
   if [ -d "$piece" ] && [ -f "$piece/schema" ]; then schema "$piece" > "/o/$n.schema" || exit 1; fi
   ;;
 put)
-  rm -rf "$STAGE" && mkdir "$STAGE" && tar -xf "/b/$n.tar" -C "$STAGE" --numeric-owner || exit 1
+  rm -rf "$STAGE" && mkdir "$STAGE" || exit 1
+  tar -xf "/b/$n.tar" -C "$STAGE" --numeric-owner || { rm -rf "$STAGE"; exit 1; }
   (cd "$STAGE" && sums "$piece") | cmp -s - "/b/$n.sums" || { rm -rf "$STAGE"; echo "data.sh: the copy of $piece isn't what was kept" >&2; exit 1; }
   if [ "$piece" = . ]; then
     # (all of it: what's there goes, what was kept comes. done again it finds the rest of either)
