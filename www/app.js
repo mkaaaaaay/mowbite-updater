@@ -101,6 +101,21 @@ const DE = {
   'Version and going back': 'Version und Rückweg',
   'Version, going back, taking out': 'Version, Rückweg, Entfernen',
   'Taking out': 'Entfernen',
+  'Data kept': 'Gesicherte Daten',
+  "Before each update the updater keeps a copy of this part's data on the mower, the newest two. Putting one back stops it, keeps what it has now first and starts it again, only with the mower ready in the dock.":
+    'Vor jedem Update sichert der Updater die Daten dieses Teils auf dem Mäher, die neuesten zwei. Beim Zurückspielen hält er ihn an, sichert vorher den jetzigen Stand und startet ihn wieder, nur mit dem Mäher bereit im Dock.',
+  'before the update, {when}: {what}': 'vor dem Update, {when}: {what}',
+  'before putting data back, {when}: {what}': 'vor dem Zurückspielen, {when}: {what}',
+  'all of its data': 'alle seine Daten',
+  'the map (map.json)': 'die Karte (map.json)',
+  'Put back': 'Zurückspielen',
+  'Really put back?': 'Wirklich zurückspielen?',
+  'Putting its data back': 'Spielt seine Daten zurück',
+  'its data from {when} put back, what it had before is kept': 'Daten von {when} zurückgespielt, der Stand davor ist gesichert',
+  "The new version didn't start and had changed the format of its data: it went back to the one before by itself, with its data from before the update. What it had then is kept.":
+    'Die neue Version lief nicht und hatte das Format ihrer Daten geändert: zurück auf die vorige, mit den Daten von vor dem Update. Der Stand danach ist gesichert.',
+  "its data couldn't be put back, see the log. The copies stay on the mower.": 'Daten ließen sich nicht zurückspielen, siehe Log. Die Sicherungen bleiben auf dem Mäher.',
+  'this copy of its data is gone': 'diese Sicherung gibt es nicht mehr',
   'In line ({n} of {of})': 'Wartet ({n} von {of})',
   'Comes with OpenMowerOS 3 itself: openmower update-os.': 'Kommt bei OpenMowerOS 3 mit dem System selbst: openmower update-os.',
   "With this version the MowBite Planner doesn't work: it needs two changes that are only in edge so far (OM_PLANNER=external and keeping the planner's settings per area).":
@@ -349,9 +364,9 @@ const working = () => asked || (!!st && (st.requested || taken().what.length > 0
 // (shown in another page or without an answer: nothing to change from here)
 const busy = () => locked || lost() || working();
 // since when this was asked (on this page or taken by the updater), null when it wasn't: "now:<part>", "now:all",
-// "back:<part>", "self", "room", "free", "check"
+// "back:<part>", "data:<part>", "self", "room", "free", "check"
 function askedSince(what) {
-  const word = askedFor.replace(/^now$/, 'now:all').replace('=', ':').replace(/^free:.*/, 'free');
+  const word = askedFor.replace(/^now$/, 'now:all').replace('=', ':').replace(/^free:.*/, 'free').replace(/^(data:.*)-\d+$/, '$1');
   if (asked && word === what) return askedAt / 1000;
   const t = taken();
   if (t.what.some((w) => (w.startsWith('free:') ? 'free' : w) === what)) return t.since;
@@ -407,6 +422,7 @@ async function post(query, body) {
 function whereOf(query) {
   const [k, v] = query.split('=');
   if ((k === 'now' || k === 'back') && v) return v;
+  if (k === 'data' && v) return v.replace(/-\d+$/, '');
   if (k === 'self') return 'updater';
   if (k === 'room' || k === 'free') return 'room';
   if (k === 'containers' || k === 'logs' || k === 'restart') return 'containers';
@@ -605,6 +621,8 @@ const ERRORS = {
   base_missing: "not built: the OpenMower image it's built on isn't on the mower",
   hold: "nothing restarted: MowBite's schedule couldn't be held (mqtt)",
   data: "nothing changed: its data couldn't be kept first",
+  data_put: "its data couldn't be put back, see the log. The copies stay on the mower.",
+  no_data: 'this copy of its data is gone',
 };
 function result(p) {
   const [state, ...rest] = S(p.id).split(' ');
@@ -615,6 +633,8 @@ function result(p) {
       return ok(rest[1] ? tr('updated to {v}', {v: rest[1]}) : tr('updated'));
     case 'back':
       return ok(rest[1] ? tr('back to the version before ({v})', {v: rest[1]}) : tr('back to the version before'));
+    case 'data_back':
+      return ok(tr('its data from {when} put back, what it had before is kept', {when: when(rest[1])}));
     case 'local':
       // (a build from a copy says so already)
       return p.kind === 'local' ? null : ok(tr('runs a version built here, updated only when asked'));
@@ -626,6 +646,9 @@ function result(p) {
       return warn(tr('stable {v} is older than what runs, it stays until a newer stable is out', {v: rest[0] || '?'}));
     case 'rolled_back':
       // (the version before runs again)
+      if (rest[0] === 'data') {
+        return warn(tr("The new version didn't start and had changed the format of its data: it went back to the one before by itself, with its data from before the update. What it had then is kept."));
+      }
       if (rest[0] === 'firmware') {
         return warn(tr("The new version keeps the motors off, it needs newer firmware: openmower update-firmware. It went back to the one before by itself. After the firmware update, tap Try again."));
       }
@@ -688,7 +711,7 @@ function troubled() {
 }
 
 // what it does right now, for the bar
-const STEPS = ['prepare', 'download', 'extract', 'build', 'restart', 'wait', 'back'];
+const STEPS = ['prepare', 'download', 'extract', 'build', 'restart', 'wait', 'back', 'data'];
 function progressNow() {
   if (!running()) return null;
   const [part, step, pct, since, done, of] = S('progress').split(' ');
@@ -719,6 +742,7 @@ function stepLabel(p) {
       restart: 'Restarting',
       wait: p.part === 'openmower' ? 'Waiting until OpenMower is ready again' : 'Waiting until it answers',
       back: 'Going back to the version before',
+      data: 'Putting its data back',
       look: 'Looking for updates',
       room: 'Looking what can go',
       free: 'Deleting',
@@ -878,6 +902,8 @@ function waiting(id) {
   if (parts.includes(id)) return !prog && parts.indexOf(id) === 0 ? {step: 'prepare', since: askedSince('now:' + id) || askedSince('now:all')} : null;
   const back = askedSince('back:' + id);
   if (back !== null) return {step: 'back', since: back};
+  const data = askedSince('data:' + id);
+  if (data !== null) return {step: 'data', since: data};
   const t = askedSince(id === 'updater' ? 'self' : 'now:' + id);
   return t !== null ? {step: 'prepare', since: t} : null;
 }
@@ -982,6 +1008,11 @@ function partCard(p) {
   ].filter(Boolean);
   const inside = [picker && h('div', {class: 'row'}, picker), notes, !backOut && back, out].flat().filter(Boolean);
   const label = out ? (picker || (back && !backOut) ? 'Version, going back, taking out' : 'Taking out') : 'Version and going back';
+  // its data kept before an update or before data was put back, newest first: back by hand
+  const kept = (st.data || []).filter((k) => k.part === id).sort((a, b) => b.at - a.at).map((k) =>
+    h('div', {class: 'row'},
+      dim(tr(k.why === 'put' ? 'before putting data back, {when}: {what}' : 'before the update, {when}: {what}', {when: when(k.at), what: keptWhat(k.what)})),
+      twoTaps('data:' + id + '-' + k.at, tr('Put back'), tr('Really put back?'), () => ask('data=' + id + '-' + k.at))));
 
   return h('div', {class: 'card'},
     head(p),
@@ -1005,8 +1036,15 @@ function partCard(p) {
     inside.length > 0 && h('details', {class: 'more', open: openMore.has(id), ontoggle: (e) => (e.target.open ? openMore.add(id) : openMore.delete(id))},
       h('summary', {'data-key': 'more:' + id}, tr(label)),
       h('div', {class: 'moreBody'}, inside)),
+    kept.length > 0 && h('details', {class: 'more', open: openMore.has('data:' + id), ontoggle: (e) => (e.target.open ? openMore.add('data:' + id) : openMore.delete('data:' + id))},
+      h('summary', {'data-key': 'moredata:' + id}, tr('Data kept')),
+      h('div', {class: 'moreBody'},
+        dim(tr("Before each update the updater keeps a copy of this part's data on the mower, the newest two. Putting one back stops it, keeps what it has now first and starts it again, only with the mower ready in the dock.")),
+        kept)),
   );
 }
+// the pieces of a copy of data in words
+const keptWhat = (what) => what.split(' ').map((w) => (w === '.' ? tr('all of its data') : w === 'map.json' ? tr('the map (map.json)') : w)).join(', ');
 
 // the apps picked on this page (besides the known and labelled ones): changed, then looked at again once saved
 const picked = () => String(st.conf.picked || 'none').split(',').filter((c) => c && c !== 'none');

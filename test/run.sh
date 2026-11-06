@@ -87,7 +87,14 @@ until_sh() {
 part() { val "next((p['id'] for p in d.get('parts', []) if p['container'] == '$1'), '')"; }
 id_of() { docker image inspect -f '{{.Id}}' "$1" 2> /dev/null; }
 runs_on() { [ "$(docker inspect -f '{{.Image}}' "$1" 2> /dev/null)" = "$(id_of "$2")" ]; }
-log_has() { val "any('$1' in l for l in d.get('log', []))"; }
+log_has() {
+  st | N="$1" python3 -c "import json, os, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+print(any(os.environ['N'] in l for l in d.get('log', [])))" 2> /dev/null
+}
 # what its card says last, its first word
 said() { val "s.get('$1', '').split(' ')[0]"; }
 # the rollback tags of a part in the app's repository
@@ -97,6 +104,13 @@ perm() { stat -c %u:%g:%a "$1"; }
 envv() { sed -n 's/^VERSION=//p' "$OMENV"; }
 # its status written the way it writes it
 in_updater() { docker exec "$P-updater" sh -c ". /lib.sh; $1"; }
+
+# in the updater's folder of the data it kept (only root may look there), and in MowBite's /data
+in_kept() { docker exec "$P-updater" sh -c "cd '$STATE/data' 2> /dev/null && $1"; }
+in_data() { docker run --rm --label "mbt.run=$P" -v "$P-mowbite_data:/data" busybox:1.37-musl sh -c "$1"; }
+# a part's copies of its data, newest first, and the newest
+kept_of() { in_kept "ls -d $1-* 2> /dev/null" | sort -t- -k2 -nr; }
+newest_of() { kept_of "$1" | grep -v '\.new$' | head -n1; }
 
 # the broker, as MowBite's scheduler and the updater use it: what it keeps on a topic, a message kept on it
 kept() { docker exec "$P-broker" mosquitto_sub -h 127.0.0.1 -t "$1" -C 1 -W 2 2> /dev/null; }
@@ -137,6 +151,7 @@ cleanup() {
   docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "^($REG/)?$P-" | xargs -r docker rmi -f > /dev/null 2>&1
   docker images -q --filter "label=mbt.run=$P" | sort -u | xargs -r docker rmi -f > /dev/null 2>&1
   docker network ls -q --filter "name=^$P-" | xargs -r docker network rm > /dev/null 2>&1
+  docker volume ls -q --filter "name=^$P-" | xargs -r docker volume rm > /dev/null 2>&1
   [ -n "$gate" ] && kill "$gate" 2> /dev/null
   [ -n "$feed" ] && kill "$feed" 2> /dev/null
   # (its folder in the stack is root's, the updater runs as root)
@@ -145,7 +160,8 @@ cleanup() {
 }
 
 # a test image <repo>:<tag> in the registry: run (says ready and stays, with /start for a planner built on it), crash
-# (ends at once), nostart (can't be started), bare (stays, nothing for a planner), mowbite (says its version $4).
+# (ends at once), nostart (can't be started), bare (stays, nothing for a planner), mowbite (says its version $4), raise
+# and touch (MowBite that changes a file in /data and doesn't answer, raise its schema too).
 # OpenMower's with a rostopic that gives its emergency's reason from the file state/reason-<tag> and a rosparam that gives
 # xbot_monitoring's parameters from state/xbot.yaml (none with state/xbot-fail)
 img() {
@@ -165,6 +181,8 @@ img() {
     crash) echo 'CMD ["sh", "-c", "exit 1"]' ;;
     nostart) echo 'CMD ["/nothing"]' ;;
     bare) echo 'CMD ["sleep", "100000"]' ;;
+    raise) echo 'CMD ["sh", "-c", "echo 2 > /data/schema; echo changed > /data/notify.conf; exec sleep 100000"]' ;;
+    touch) echo 'CMD ["sh", "-c", "echo changed > /data/notify.conf; exec sleep 100000"]' ;;
     mowbite)
       cat > "$dir/version" << EOF
 #!/bin/sh
@@ -287,6 +305,7 @@ REL=$(curl -sI -m 15 https://github.com/mkaaaaaay/mowbite/releases/latest | tr -
 for v in v1 v2 v3 v4 v5 dl a3old a3new a3n1 a3n2; do img app "$v" run || bad "app:$v doesn't build"; done
 for v in o1 o2 o3 o4 o6 o7 o8 o9; do img om "$v" run || bad "om:$v doesn't build"; done
 img app broken crash && img om ox nostart && img om o5 bare && img mowbite m1 mowbite 9.0.0-beta.1 || bad "a test image doesn't build"
+img mowbite m2 mowbite 9.0.0-beta.2 && img mowbite m3 raise && img mowbite m4 touch || bad "a test image of MowBite doesn't build"
 # (made a second later than all before them: the first of another version line)
 sleep 1
 img om f1 run && img om f2 run || bad "om:f1 or f2 doesn't build"
@@ -419,6 +438,7 @@ services:
     volumes:
       - $WORK/state:/state:ro
       - $WORK/params:/data/params
+      - $WORK/ros:/data/ros
     labels:
       mbt.run: $P
 EOF
@@ -443,6 +463,10 @@ mower_logic:
   docking_approach_distance: 1.5
 PARAMS
 chmod 644 "$WORK/params/mower_params.yaml"
+# its map, as OpenMower keeps it in /data/ros
+mkdir -p "$WORK/ros"
+echo '{"areas":["front"]}' > "$WORK/ros/map.json"
+chmod 640 "$WORK/ros/map.json"
 chmod 640 "$OMENV"
 # built on OpenMower's image like the planner, from github, starts with what OpenMower's image has for it
 cat > "$STACKS/planner/compose.yaml" << EOF
@@ -475,9 +499,13 @@ services:
     build: .
     container_name: $P-mowbite
     network_mode: bridge
+    volumes:
+      - data:/data
     labels:
       mbt.run: $P
       mowbite.update.stable: github:mkaaaaaay/mowbite
+volumes:
+  data:
 EOF
 printf 'FROM busybox:1.37-musl\n' > "$STACKS/mowbite/Dockerfile"
 # the updater's own image under another name, labelled: not an app to update from inside
@@ -527,6 +555,9 @@ docker pull -q "$REG/$P-om:edge" > /dev/null
 docker compose -f "$STACKS/planner/compose.yaml" up -d > /dev/null 2>&1 || bad "the planner doesn't build (github?)"
 docker compose -f "$WORK/away/compose.yaml" up -d > /dev/null 2>&1
 docker run -d --name "$P-loose" --label "mbt.run=$P" --label mowbite.update=on busybox:1.37-musl sleep 100000 > /dev/null
+# MowBite's /data as the app keeps it: its schema, a push token, its stats, owned by its user
+docker exec "$P-mowbite" sh -c 'echo 1 > /data/schema && printf "topic t\ntoken tok-data-31337\n" > /data/notify.conf && chmod 600 /data/notify.conf &&
+  mkdir -p /data/stats && echo "1 2 3" > /data/stats/hours && chown -R 1000:1000 /data' || bad "MowBite's /data can't be filled"
 docker compose -f "$STACKS/updater/compose.yaml" up -d > /dev/null 2>&1
 until_true "s.get('checked')" 180 || { bad "the updater doesn't come up"; exit 1; }
 ok "the updater runs and has looked ($from, $(val "s.get('updater_running')"))"
@@ -774,6 +805,118 @@ until_true "s.get('mowbite', '').startswith('stable_older') and s.get('result') 
 docker exec "$P-mowbite" rm -f /tmp/quiet
 post conf 'mowbite beta' > /dev/null
 
+say "data: kept before an update"
+move mowbite latest m2
+post now=mowbite > /dev/null
+until_true "s.get('mowbite', '').startswith('updated') and s.get('result') != 'running'" 180 && runs_on "$P-mowbite" "$REG/$P-mowbite:m2" &&
+  ok "MowBite updated to m2" || bad "MowBite: $(val "s.get('mowbite')"), runs $(docker inspect -f '{{.Image}}' "$P-mowbite")"
+K1=$(newest_of mowbite)
+r=$(in_kept "stat -c %a . '$K1' && cat '$K1/why' '$K1/1.schema' && (cd '$K1' && sha256sum -c -s sha256 && echo sums) && tar -xOf '$K1/1.tar' ./notify.conf | grep -c tok-data-31337" | tr '\n' ' ')
+[ -n "$K1" ] && [ "$r" = "700 700 update 1 sums 1 " ] && ok "its /data kept as a tar with its schema and sha256, only root may look" || bad "kept: $K1, $r"
+[ "$(kept_of mowbite | wc -l)" -eq 1 ] && ok "one copy" || bad "copies: $(kept_of mowbite | tr '\n' ' ')"
+r=$(curl -s -m 10 "$API")
+[ "$(val "[(k['part'], k['why'], k['what']) for k in d.get('data', [])]")" = "[('mowbite', 'update', '.')]" ] && ok "its page lists it" ||
+  bad "the list: $(val "d.get('data')")"
+case $r in *tok-data-31337*) bad "its answer has what's kept" ;; *) ok "its answer has nothing of what's kept" ;; esac
+n=0
+for u in ".updater/data/$K1/1.tar" "../.updater/data/$K1/1.tar" "cgi-bin/../../$STATE/data/$K1/1.tar" "$STATE/data/$K1/1.tar" "%2e%2e/%2e%2e/$STATE/data/$K1/sha256"; do
+  c=$(curl -s -m 10 --path-as-is -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PAGE/$u")
+  [ "$c" = 200 ] && n=$((n + 1))
+done
+[ $n -eq 0 ] && ok "the copies can't be had over its port" || bad "$n of its paths handed out a copy"
+
+say "data: a new version that raises its schema doesn't run"
+move mowbite latest m3
+post now=mowbite > /dev/null
+until_true "s.get('mowbite', '').startswith('rolled_back') and s.get('result') != 'running'" 400 && runs_on "$P-mowbite" "$REG/$P-mowbite:m2" &&
+  [ "$(val "s.get('mowbite', '').split(' ')[1:]")" = "['data']" ] && ok "back on m2 with its data from before the update" ||
+  bad "MowBite: $(val "s.get('mowbite')"), runs $(docker inspect -f '{{.Image}}' "$P-mowbite")"
+[ "$(in_data 'cat /data/schema; grep -c tok-data-31337 /data/notify.conf; stat -c %u:%a /data/notify.conf' | tr '\n' ' ')" = "1 1 1000:600 " ] &&
+  ok "schema 1 and the push token again, with owner and rights" || bad "/data: $(in_data 'cat /data/schema /data/notify.conf' | tr '\n' ' ')"
+K2=$(newest_of mowbite)
+r=$(in_kept "cat '$K2/why' '$K2/1.schema' && tar -xOf '$K2/1.tar' ./notify.conf" | tr '\n' ' ')
+[ "$r" = "put 2 changed " ] && ok "what the new version made of it kept first, nothing gone" || bad "kept before putting back: $K2, $r"
+[ "$(kept_of mowbite | wc -l)" -eq 2 ] && ok "the newest two copies" || bad "copies: $(kept_of mowbite | tr '\n' ' ')"
+[ -z "$(val "s.get('data_put')")" ] && ok "nothing left to finish" || bad "data_put: $(val "s.get('data_put')")"
+
+say "data: a new version with the same schema doesn't run"
+move mowbite latest m4
+t0=$(date +%s)
+post now=mowbite > /dev/null
+until_true "s.get('mowbite', '').startswith('rolled_back') and int(s.get('mowbite_at', 0)) >= $t0 and s.get('result') != 'running'" 400 &&
+  runs_on "$P-mowbite" "$REG/$P-mowbite:m2" && [ "$(val "s.get('mowbite')")" = rolled_back ] && ok "back on m2, its data left as it is" ||
+  bad "MowBite: $(val "s.get('mowbite')"), runs $(docker inspect -f '{{.Image}}' "$P-mowbite")"
+[ "$(in_data 'cat /data/notify.conf')" = changed ] && ok "nothing put back without a higher schema" || bad "/data: $(in_data 'cat /data/notify.conf')"
+K3=$(newest_of mowbite)
+[ "$(in_kept "cat '$K3/why'")" = update ] && [ "$(kept_of mowbite | wc -l)" -eq 2 ] && ok "kept before it, still two copies" ||
+  bad "copies: $(kept_of mowbite | tr '\n' ' ')"
+move mowbite latest m2
+
+say "data: the updater stopped while it put it back"
+# (as a stop halfway leaves it: MowBite stopped, part of /data gone, something half unpacked, a copy half written)
+docker stop -t 1 "$P-updater" > /dev/null
+docker stop -t 1 "$P-mowbite" > /dev/null
+in_data 'rm -rf /data/stats && echo junk > /data/junk && mkdir -p /data/.updater-put && echo half > /data/.updater-put/notify.conf'
+docker run --rm --label "mbt.run=$P" -v "$STACKS:$STACKS" -e "STATE_DIR=$STATE" --entrypoint sh "$REG/$P-updater:b" -c \
+  ". /lib.sh; status data_put mowbite '$STATE/data/$K2' '$STATE/data/$K3' && mkdir -m 700 '$STATE/data/mowbite-1.new' && echo x > '$STATE/data/mowbite-1.new/1.tar'"
+docker start "$P-updater" > /dev/null
+until_true "not s.get('data_put') and s.get('alive')" 180 && until_sh 'docker exec "$P-mowbite" true 2> /dev/null' 60 &&
+  ok "at its next start it put it back again, MowBite runs" || bad "after the restart: data_put $(val "s.get('data_put')"), MowBite $(docker inspect -f '{{.State.Status}}' "$P-mowbite")"
+[ "$(in_data 'cat /data/notify.conf /data/stats/hours; ls -A /data' | tr '\n' ' ')" = "changed 1 2 3 notify.conf schema stats " ] &&
+  ok "/data whole as it was kept, nothing half of it" || bad "/data: $(in_data 'ls -A /data' | tr '\n' ' ')"
+[ "$(val "[k['at'] for k in d.get('data', []) if k['at'] == 1]")" = "[]" ] && ok "a copy half written isn't on its list" || bad "listed: $(val "d.get('data')")"
+
+say "data: put back by hand"
+mower out
+r=$(post "data=$K3")
+until_true "s.get('mowbite') == 'error not_docked'" 60 && [ "$(in_data 'cat /data/notify.conf')" = changed ] && ok "not with the mower out" ||
+  bad "with the mower out ($r): $(val "s.get('mowbite')")"
+mower docked
+[ "$(post "data=mowbite-1")$(post "data=nobody-${K3#*-}")$(post "data=mowbite-x;id")$(post "data=../${K3}")" = badbadbadbad ] &&
+  ok "only a copy it has" || bad "a copy it doesn't have was taken"
+post "data=$K3" > /dev/null
+until_true "s.get('mowbite', '').startswith('data_back') and s.get('result') != 'running'" 180 && runs_on "$P-mowbite" "$REG/$P-mowbite:m2" &&
+  [ "$(in_data 'grep -c tok-data-31337 /data/notify.conf; cat /data/schema; ls -A /data' | tr '\n' ' ')" = "1 1 notify.conf schema stats " ] &&
+  ok "its data from before the last update back, MowBite runs" || bad "by hand: $(val "s.get('mowbite')"), /data $(in_data 'ls -A /data' | tr '\n' ' ')"
+[ "$(log_has "doesn't answer after its data")" = False ] && ok "and answers" || bad "it doesn't answer after its data was put back"
+K4=$(newest_of mowbite)
+[ "$(in_kept "cat '$K4/why' && tar -xOf '$K4/1.tar' ./notify.conf" | tr '\n' ' ')" = "put changed " ] && ok "what it had kept first" ||
+  bad "kept before: $K4"
+! kept_of mowbite | grep -q '\.new$' && ok "the copy half written is gone" || bad "left: $(kept_of mowbite | tr '\n' ' ')"
+# (a copy that doesn't match its sha256: nothing put back)
+in_kept "echo x >> '$K4/1.tar'"
+post "data=$K4" > /dev/null
+until_true "s.get('mowbite') == 'error data_put' and s.get('result') != 'running'" 120 &&
+  [ "$(in_data 'grep -c tok-data-31337 /data/notify.conf')" = 1 ] && runs_on "$P-mowbite" "$REG/$P-mowbite:m2" &&
+  ok "a copy that changed isn't put back, MowBite runs on" || bad "a changed copy: $(val "s.get('mowbite')")"
+
+say "data: the disk full while it keeps them"
+# (its folder on a disk of 2 MB, the same path for the updater and its helpers: an updater of its own for this, /data
+# bigger than that. OpenMower 1 GB to spare, MowBite: room enough said, the disk fills up during the tar)
+docker volume create --label "mbt.run=$P" --driver local --opt type=tmpfs --opt device=tmpfs --opt o=size=2m "$P-small" > /dev/null
+SMALL=$(docker volume inspect -f '{{.Mountpoint}}' "$P-small")
+in_data 'dd if=/dev/urandom of=/data/big bs=1k count=3072 2> /dev/null'
+move mowbite latest m1
+small() {
+  docker run --rm --label "mbt.run=$P" --network host -v /var/run/docker.sock:/var/run/docker.sock -v "$STACKS:$STACKS" -v "$P-small:$SMALL" \
+    -e "STATE_DIR=$SMALL" -e "UPDATER_CONTAINER=$P-updater" -e "MOWBITE_CONTAINER=$P-mowbite" -e "OPENMOWER_CONTAINER=$P-om" -e "MQTT_PORT=$MQTT" \
+    -e UPDATER_NO_LOOP=1 -e PRUNE=0 --entrypoint sh "$REG/$P-updater:b" -c "grep '^parts ' '$STATE/status' > '$SMALL/status'; . /updater.sh; $1"
+}
+r=$(small 'keep_data mowbite update; echo "$?|$(ls -A "$STATE/data" 2> /dev/null)|$(tail -n1 "$LOG")"')
+case $r in "1||"*"not enough room"*) ok "not enough room: nothing kept, it says why" ;; *) bad "not enough room: $r" ;; esac
+rb=$(docker images --format '{{.Tag}}' "$REG/$P-mowbite" | grep -c '^rb-')
+r=$(small 'free_mb() { echo 900; }; MANUAL=1; update_part mowbite; echo "$?|$(get mowbite)|$(ls -A "$STATE/data" 2> /dev/null)|$(df -k "$STATE" | awk "NR == 2 {print \$4}")"')
+case $r in
+"1|error data||"[1-9]*) ok "the disk full during the tar: nothing kept, nothing left of it, the update not done" ;;
+*) bad "the disk full: $r" ;;
+esac
+runs_on "$P-mowbite" "$REG/$P-mowbite:m2" && [ "$(id_of "$REG/$P-mowbite:latest")" = "$(id_of "$REG/$P-mowbite:m2")" ] &&
+  [ "$(docker images --format '{{.Tag}}' "$REG/$P-mowbite" | grep -c '^rb-')" = "$rb" ] && ok "MowBite as it was, its tag on what runs, no way back left over" ||
+  bad "MowBite runs $(docker inspect -f '{{.Image}}' "$P-mowbite"), tags $(docker images --format '{{.Tag}}' "$REG/$P-mowbite" | tr '\n' ' ')"
+in_data 'rm -f /data/big'
+docker volume rm "$P-small" > /dev/null
+move mowbite latest m2
+
 say "OpenMower, its .env saved with another version, the mower leaves during the download"
 mode=$(perm "$OMENV")
 # (one only in the registry: its download has something to hold)
@@ -1008,6 +1151,30 @@ until_true "s.get('openmower', '').startswith('updated') and int(s.get('openmowe
   [ "$(log_has 'off for the firmware already')" = True ] && ok "updated, the new version isn't blamed for it" ||
   bad "openmower: $(val "s.get('openmower')"), runs $(docker inspect -f '{{.Image}}' "$P-om")"
 rm -f "$WORK/state/reason-f1" "$WORK/state/reason-f2" "$WORK/feed/releases.atom"
+
+say "data: OpenMower's map put back by hand"
+O=$(newest_of openmower)
+[ "$(in_kept "stat -c %a '$O' && cat '$O/why' && sed 's/.*|//' '$O/what' && tar -xOf '$O/1.tar' map.json" | tr '\n' ' ')" = '700 update map.json mower_params.yaml {"areas":["front"]} ' ] &&
+  ok "its map and mower_params.yaml kept before its update" || bad "kept: $O"
+mode=$(perm "$WORK/ros/map.json")
+echo '{"areas":["changed"]}' > "$WORK/ros/map.json"
+soon=$(($(date +%s) + 600))
+keep mowbite/schedule/next -m "{\"from\":$soon,\"to\":$soon}"
+post "data=$O" > /dev/null
+until_true "s.get('openmower', '').startswith('error schedule') and s.get('result') != 'running'" 60 && grep -q changed "$WORK/ros/map.json" &&
+  ok "not in the 30 minutes before the schedule may start the mower" || bad "before the schedule: $(val "s.get('openmower')")"
+keep mowbite/schedule/next -n
+ran=$(docker inspect -f '{{.Image}}' "$P-om")
+post "data=$O" > /dev/null
+until_true "s.get('openmower', '').startswith('data_back') and s.get('result') != 'running'" 240 &&
+  [ "$(cat "$WORK/ros/map.json")" = '{"areas":["front"]}' ] && [ "$(perm "$WORK/ros/map.json")" = "$mode" ] &&
+  ok "its map back, with its owner and rights" || bad "by hand: $(val "s.get('openmower')"), $(cat "$WORK/ros/map.json") $(perm "$WORK/ros/map.json")"
+[ "$(docker inspect -f '{{.Image}} {{.State.Running}}' "$P-om")" = "$ran true" ] && [ -z "$(kept mowbite/hold)" ] &&
+  ok "OpenMower runs again on what it ran, the schedule free again" || bad "OpenMower: $(docker inspect -f '{{.Image}} {{.State.Running}}' "$P-om"), held $(kept mowbite/hold)"
+O2=$(newest_of openmower)
+[ "$(in_kept "cat '$O2/why' && tar -xOf '$O2/1.tar' map.json" | tr '\n' ' ')" = 'put {"areas":["changed"]} ' ] && ok "the map it had kept first" ||
+  bad "kept before: $O2"
+[ "$(kept_of openmower | wc -l)" -eq 2 ] && ok "the newest two copies" || bad "copies: $(kept_of openmower | tr '\n' ' ')"
 
 say "the night"
 move om edge o7

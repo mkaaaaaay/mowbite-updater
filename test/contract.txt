@@ -4,6 +4,7 @@ answer cache
 answer conf
 answer container
 answer containers
+answer data
 answer days
 answer gate
 answer id
@@ -12,6 +13,7 @@ answer items
 answer kind
 answer log
 answer name
+answer part
 answer parts
 answer picked
 answer refs
@@ -23,6 +25,8 @@ answer stack
 answer started
 answer state
 answer status
+answer what
+answer why
 compose container mowbite-updater
 compose image ghcr.io/mkaaaaaay/mowbite-updater:latest
 compose network host
@@ -67,6 +71,7 @@ request calib=back
 request check
 request conf
 request containers
+request data=*
 request free=cache | free=all
 request free=img:*
 request logs=* | restart=*
@@ -108,6 +113,7 @@ status candidates
 status changed_<part>
 status checked
 status clock
+status data_put
 status disk_free
 status embed
 status looking

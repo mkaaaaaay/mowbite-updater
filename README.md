@@ -58,6 +58,9 @@ On its page `http://<your-mower>:8083`, or in MowBite under Settings, Updates:
 - **Automatically at night** lets it update that app by itself, at the time and on the days you pick.
 - **Back to the version before** if something is wrong after an update (MowBite and other apps, and OpenMower as long
   as its registry still has the version before).
+- **Data kept**: before each update it keeps a copy of OpenMower's map and `mower_params.yaml` and of MowBite's
+  settings and logs on the mower, the newest two. Tap one to put it back: it keeps what is there now first, then puts
+  the copy back and starts the app again, only with the mower idle in its dock.
 - **Make room** shows old versions and leftovers you can delete. After each update it clears leftovers without a name,
   the unused build cache and older versions beyond the ones it keeps by itself.
 - **MowBite Updater** has a card of its own: "Update" there updates the updater itself.
@@ -108,13 +111,18 @@ Without a check it waits for Docker's own health check, or else half a minute wi
   both sides of that line in `compose.yaml`.
 - **Docker access:** like Dockge it needs `/var/run/docker.sock`. It changes your stacks only through their compose
   files, so Dockge shows the same.
-- **Settings and log** stay in its own stack folder (`.updater`).
+- **Settings and log** stay in its own stack folder (`.updater`), the copies of data there too, only root can read
+  them and they never leave the mower (`mower_params.yaml` has your NTRIP login).
+- **Data and going back:** if a new MowBite doesn't start and had changed the format of its data, it goes back to the
+  version before with its data from before the update, and keeps the newer data. OpenMower's map and
+  `mower_params.yaml` only go back when you tap it.
 - **Stopped halfway** (power gone): at its next start it puts things back or finishes checking. Only if the power goes
   in the few seconds it swaps itself for its new version, it may not come back: then tap "Update" on its stack in Dockge.
 - **Tested** before every new version, which only goes out when all tests pass: `test/run.sh` runs it against a
   made-up mower on the machine's own docker (update and back, a version that doesn't start, the mower leaving the dock,
-  a stop halfway, a request while it checks, picked apps, stable, OpenMower and the planner built on it, the night, no
-  answer from the registry, making room, builds, itself).
+  a stop halfway, a request while it checks, picked apps, stable, OpenMower and the planner built on it, data kept and
+  put back, also with the disk full or a stop halfway, the night, no answer from the registry, making room, builds,
+  itself).
 
 <details>
 <summary>Settings (environment)</summary>
@@ -142,13 +150,14 @@ network.
 
 - `GET /cgi-bin/updater`: settings, apps, status, what can go and the log as JSON. While it updates, `status.progress`
   says what it does: `<app> <step> <percent or -> <since> [<done> <of>]`, steps `prepare`, `download`, `extract`,
-  `build`, `restart`, `wait`, `back`. `requested` is true while a request waits for it, `status.taken`
+  `build`, `restart`, `wait`, `back`, `data`. `data` lists the copies of data kept (`part`, `at`, `why`: `update` or
+  `put`, `what`), never their content. `requested` is true while a request waits for it, `status.taken`
   (`<since> now:<app> self back:<app> ...`) from when it takes one until its run shows, `status.looking` (`<since>`)
   while it looks for updates
 - `POST /cgi-bin/updater?conf` with lines like `openmower edge`, `mowbite stable`, `mowbite_auto 1`, `at 03:00`,
   `days daily` (or `days 1,3,5`, Monday is 1), `picked app1,app2` (or `picked none`). Lines left out stay as they are
-- `POST ?now` (all apps, then itself) or `?now=<app>`, `?self` (only itself), `?back=<app>`, `?check`, `?room`,
-  `?free=img:<id>`, `?free=cache`, `?free=all`. Its own state is in `status` as `updater_running`, `updater_available`
+- `POST ?now` (all apps, then itself) or `?now=<app>`, `?self` (only itself), `?back=<app>`, `?data=<app>-<at>`
+  (a copy of its data back), `?check`, `?room`, `?free=img:<id>`, `?free=cache`, `?free=all`. Its own state is in `status` as `updater_running`, `updater_available`
   and `updater`. What came of an app last is `status.<app>`, from when `status.<app>_at` (unix time), the mower's time
   zone `status.clock` (`+0100`)
 
