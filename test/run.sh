@@ -943,7 +943,10 @@ until_true "s.get('openmower', '').startswith('rolled_back') and s.get('result')
 [ "$(envv)" = '"v1"' ] && ok "its .env says that one, not the one it was saved with" || bad "its .env: $(envv)"
 grep -qx 'OM_PLANNER=external' "$OMENV" && grep -qx '# made-up OpenMower' "$OMENV" && ok "the rest of its .env as it was" || bad "its .env: $(cat "$OMENV")"
 [ "$(perm "$OMENV")" = "$mode" ] && [ ! -e "$OMENV.before-update" ] && ok "with its owner and rights, no copy left" || bad "the file: $(perm "$OMENV")"
-[ "$(val "len(s.get('openmower_failed', '').split())")" = 2 ] && ok "that version left out" || bad "left out: $(val "s.get('openmower_failed')")"
+# (its id and each digest it came with: with the classic store latest's own digest too, imagetools made it anew)
+left=$(val "s.get('openmower_failed', '')")
+latest=$(docker buildx imagetools inspect "$REG/$P-om:latest" --format '{{.Manifest.Digest}}' 2> /dev/null)
+case " $left " in *" $latest "*) [ "$(echo "$left" | wc -w)" -ge 2 ] && ok "that version left out" || bad "left out: $left" ;; *) bad "left out: $left, not $latest" ;; esac
 
 say "OpenMower, MowBite's schedule starts the mower soon"
 # from here OpenMower sends to an external broker too, its prefix without the / (the test's broker under ext/)

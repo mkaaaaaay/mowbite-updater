@@ -2256,7 +2256,8 @@ tidy() {
         fi
       done
     }
-    docker images --digests --no-trunc --format '{{.Tag}} {{.Digest}} {{.ID}}' "$repo" 2>/dev/null | while read -r t dg id; do
+    # (-a: docker 29's cli leaves untagged ones out of the list with the classic store)
+    docker images -a --digests --no-trunc --format '{{.Tag}} {{.Digest}} {{.ID}}' "$repo" 2>/dev/null | while read -r t dg id; do
       [ "$t" = "<none>" ] && [ "$dg" != "<none>" ] || continue
       case $used in *" $id "*) continue ;; esac
       docker rmi "$repo@$dg" > /dev/null 2>&1 && log "removed $repo@$dg, nothing uses it any more"
