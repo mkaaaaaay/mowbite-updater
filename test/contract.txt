@@ -56,6 +56,10 @@ form status <part> updated <unix s> <a release's tag or the commit>, of a build
 form status <part>_available yes|no|failed|unknown <its release's tag or its branch>, of a build
 form status <part>_release <its tag, v0.2.0>, none for its branch
 form status <part>_stable yes|no, also of the planner's build
+form status nokeep_openmower rm|drop|new|back <new tag> <the one before by digest> <its tag> <the new one's digest, or -> [<its image id, or -> <why back>]
+form status openmower_missing <tries> <next try, unix s, or -> <new|back, what it downloads> <the new version> <the one before by its digest> <the tag it ran under> <its stack's folder, or ->
+form status openmower_nokeep no prev|env|registry|holders|room <MB needed> <MB there>|box <container>|base <part>|github <part>
+form status openmower_nokeep yes <MB downloaded> <parts built again, commas, or -> <tags back afterwards, commas, or -> <tags gone for good, commas, or ->
 form status updater_release <its tag, v1.2.0>, none for a build of main
 label mowbite.update.check
 label mowbite.update.gate
@@ -75,6 +79,7 @@ request data=*
 request free=cache | free=all
 request free=img:*
 request logs=* | restart=*
+request nokeep=*
 request now
 request now=* | back=*
 request room
@@ -117,11 +122,15 @@ status clock
 status data_put
 status disk_free
 status embed
+status gone_<part>
+status gone_openmower
 status looking
 status mowbite_name
 status mowbite_version
 status mower
 status night_done
+status nokeep_holders
+status nokeep_openmower
 status openmower_available
 status openmower_back
 status openmower_env
@@ -130,7 +139,9 @@ status openmower_fw
 status openmower_fw_check
 status openmower_gate
 status openmower_line
+status openmower_missing
 status openmower_name
+status openmower_nokeep
 status openmower_prev
 status openmower_running
 status openmower_saved

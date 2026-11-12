@@ -203,6 +203,48 @@ const DE = {
   'no stable release found': 'kein stabiles Release gefunden',
   "not built: the OpenMower image it's built on isn't on the mower": 'nicht gebaut: Das OpenMower-Image, auf dem er aufbaut, ist nicht auf dem Mäher',
   'failed ({why})': 'fehlgeschlagen ({why})',
+  "its update without a copy isn't finished": 'sein Update ohne Kopie ist nicht fertig',
+  "a container couldn't be removed and one removed before couldn't be made again, see the log": 'ein Container ließ sich nicht entfernen, und einer der schon entfernten ließ sich nicht wieder anlegen, siehe Log',
+  "{name} isn't on the mower right now: it's built again once the mower is idle in the dock.": '{name} ist gerade nicht auf dem Mäher: Es wird neu gebaut, sobald der Mäher ruhig im Dock steht.',
+  'The version before runs again, started by hand. The new one isn\'t on the mower.': 'Die vorige Version läuft wieder, von Hand gestartet. Die neue ist nicht auf dem Mäher.',
+  'By hand in a terminal on the mower, the version before:': 'Von Hand in einem Terminal auf dem Mäher, die vorige Version:',
+  "a container couldn't be removed: nothing deleted, all runs as before": 'ein Container ließ sich nicht entfernen: nichts gelöscht, alles läuft wie vorher',
+  "its update without a copy isn't done yet, that goes on first": 'sein Update ohne Kopie ist noch nicht fertig, das geht zuerst weiter',
+  "OpenMower is being replaced: the version before is deleted, the new one doesn't run yet. The mower can't mow until then.":
+    'OpenMower wird gerade ersetzt: Die vorige Version ist gelöscht, die neue läuft noch nicht. Bis dahin kann der Mäher nicht mähen.',
+  "The new version couldn't be downloaded, there's no room for it even now. The one before came back from its registry.":
+    'Die neue Version ließ sich nicht laden, auch jetzt reicht der Platz nicht. Die vorige kam aus ihrer Registry zurück.',
+  "The new version couldn't be downloaded, its registry doesn't have it. The one before came back from its registry.":
+    'Die neue Version ließ sich nicht laden, ihre Registry hat sie nicht. Die vorige kam aus ihrer Registry zurück.',
+  "{name} isn't on the mower right now: it was deleted with OpenMower's version before and building it again failed. Update builds it again.":
+    '{name} ist gerade nicht auf dem Mäher: Es wurde mit der vorigen OpenMower-Version gelöscht, und der Neubau ist gescheitert. Aktualisieren baut es neu.',
+  // OpenMower without a copy
+  "Installed: none, OpenMower isn't on the mower right now": 'Installiert: keine, OpenMower ist gerade nicht auf dem Mäher',
+  "Both versions don't fit side by side. This way the version that runs is deleted first, then the new one downloaded ({size}). Until then the mower has no OpenMower and can't mow.":
+    'Beide Versionen passen nicht nebeneinander. So wird die laufende Version zuerst gelöscht, dann die neue geladen ({size}). Solange hat der Mäher kein OpenMower und kann nicht mähen.',
+  "There's no way back on the mower itself: if the new one doesn't start, the updater downloads the old one again (that takes as long as the update and needs the internet).":
+    'Auf dem Mäher selbst gibt es keinen Rückweg: Startet die neue nicht, lädt der Updater die alte noch einmal (dauert so lange wie das Update, braucht Internet).',
+  "What's built on OpenMower ({names}) is deleted with it and built again afterwards. If building fails, the mower can only mow again once it's built.":
+    'Was auf OpenMower gebaut ist ({names}), wird mit gelöscht und danach neu gebaut. Scheitert der Bau, kann der Mäher erst wieder mähen, wenn es gebaut ist.',
+  'Deleted and downloaded or built again: {tags}.': 'Gelöscht und neu geladen oder neu gebaut: {tags}.',
+  'Deleted for good: {tags}.': 'Für immer gelöscht: {tags}.',
+  'Delete the old version and update': 'Alte Version löschen und aktualisieren',
+  'Really delete it first?': 'Wirklich zuerst löschen?',
+  "Deleting the old version first isn't possible here: {why}.": 'Die alte Version zuerst zu löschen, geht hier nicht: {why}.',
+  "the version that runs can't be downloaded again from its registry (built here, or no answer)":
+    'die laufende Version lässt sich nicht wieder aus ihrer Registry laden (hier gebaut oder keine Antwort)',
+  "OpenMower's .env names another version than the one that runs": 'OpenMowers .env nennt eine andere Version als die laufende',
+  "the size of the new version isn't known": 'die Größe der neuen Version ist unbekannt',
+  "it isn't known which images hold the version that runs": 'es ist unbekannt, welche Images die laufende Version halten',
+  "even then there isn't room enough (needs about {need}, {has} there)": 'auch dann reicht der Platz nicht (braucht etwa {need}, {has} da)',
+  'the container "{name}" uses the version that runs and the updater can\'t build it again': 'der Container „{name}“ nutzt die laufende Version, und der Updater kann ihn nicht neu bauen',
+  '{name} is built on OpenMower and the version picked comes under another name': '{name} ist auf OpenMower gebaut, und die gewählte Version kommt unter einem anderen Namen',
+  "it isn't known what to build of {name} (GitHub doesn't answer)": 'es ist unbekannt, was von {name} gebaut werden soll (GitHub antwortet nicht)',
+  "OpenMower isn't on the mower right now, the mower can't mow.": 'OpenMower ist gerade nicht auf dem Mäher, der Mäher kann nicht mähen.',
+  'Next try by itself: {when}.': 'Nächster Versuch von selbst: {when}.',
+  'No more tries by itself: tap Try again.': 'Keine Versuche von selbst mehr: auf Erneut versuchen tippen.',
+  'By hand in a terminal on the mower, the new version:': 'Von Hand in einem Terminal auf dem Mäher, die neue Version:',
+  'or the version before:': 'oder die vorige Version:',
   // when
   'When it updates by itself': 'Wann automatisch aktualisiert wird',
   'At': 'Um',
@@ -423,7 +465,7 @@ async function post(query, body) {
 // where a request without an answer is said: on the card it was tapped on
 function whereOf(query) {
   const [k, v] = query.split('=');
-  if ((k === 'now' || k === 'back') && v) return v;
+  if ((k === 'now' || k === 'back' || k === 'nokeep') && v) return v;
   if (k === 'data' && v) return wordOf(query).slice('data:'.length);
   if (k === 'self') return 'updater';
   if (k === 'room' || k === 'free') return 'room';
@@ -561,6 +603,7 @@ const autoOn = (id) => st.conf[id + '_auto'] === 1;
 function installed(p) {
   if (p.kind === 'os') return dim(tr('Comes with OpenMowerOS 3 itself: openmower update-os.'));
   const [what, day] = S(p.id + '_running').split(' ');
+  if (p.kind === 'openmower' && what === 'missing') return dim(tr("Installed: none, OpenMower isn't on the mower right now"));
   const d = date(day);
   let v;
   if (p.id === 'updater' && S('updater_release')) {
@@ -625,6 +668,10 @@ const ERRORS = {
   data: "nothing changed: its data couldn't be kept first",
   data_put: "its data couldn't be put back, see the log. The copies stay on the mower.",
   no_data: 'this copy of its data is gone',
+  missing: "its update without a copy isn't finished",
+  remove: "a container couldn't be removed: nothing deleted, all runs as before",
+  undo: "a container couldn't be removed and one removed before couldn't be made again, see the log",
+  nokeep: "its update without a copy isn't done yet, that goes on first",
 };
 function result(p) {
   const [state, ...rest] = S(p.id).split(' ');
@@ -646,8 +693,13 @@ function result(p) {
       return warn(tr("this version didn't start before, it waits for the next one"));
     case 'stable_older':
       return warn(tr('stable {v} is older than what runs, it stays until a newer stable is out', {v: rest[0] || '?'}));
+    case 'replacing':
+      return warn(tr("OpenMower is being replaced: the version before is deleted, the new one doesn't run yet. The mower can't mow until then."));
     case 'rolled_back':
       // (the version before runs again)
+      if (rest[0] === 'nospace') return warn(tr("The new version couldn't be downloaded, there's no room for it even now. The one before came back from its registry."));
+      if (rest[0] === 'hand') return warn(tr('The version before runs again, started by hand. The new one isn\'t on the mower.'));
+      if (rest[0] === 'unknown') return warn(tr("The new version couldn't be downloaded, its registry doesn't have it. The one before came back from its registry."));
       if (rest[0] === 'data') {
         return warn(tr("The new version didn't start and had changed the format of its data: it went back to the one before by itself, with its data from before the update. What it had then is kept."));
       }
@@ -673,6 +725,9 @@ function result(p) {
       // (a build changes no compose file: the stopped one couldn't be made anew on it)
       if (rest[0] === 'compose' && p.kind === 'build') return {text: tr("built anew, but it couldn't be set up on the new build, the one before stays"), level: 'error'};
       if (rest[0] === 'rollback') return {text: tr('going back failed, {name} may not be running', {name: nameOf(p)}), level: 'error'};
+      // (deleted with OpenMower's version before)
+      if (rest[0] === 'gone_dock') return warn(tr("{name} isn't on the mower right now: it's built again once the mower is idle in the dock.", {name: nameOf(p)}));
+      if (rest[0] === 'gone') return {text: tr("{name} isn't on the mower right now: it was deleted with OpenMower's version before and building it again failed. Update builds it again.", {name: nameOf(p)}), level: 'error'};
       return {text: ERRORS[rest[0]] ? tr(ERRORS[rest[0]]) : tr('failed ({why})', {why: rest.join(' ') || '?'}), level: 'error'};
     default:
       return null;
@@ -910,8 +965,13 @@ function waiting(id) {
   if (back !== null) return {step: 'back', since: back};
   const data = askedSince('data:' + id);
   if (data !== null) return {step: 'data', since: data};
-  const t = askedSince(id === 'updater' ? 'self' : 'now:' + id);
+  const t = askedUpdate(id);
   return t !== null ? {step: 'prepare', since: t} : null;
+}
+// its update asked for on its own, with or without a copy
+function askedUpdate(id) {
+  const t = askedSince(id === 'updater' ? 'self' : 'now:' + id);
+  return t !== null ? t : askedSince('nokeep:' + id);
 }
 // its getting ready counted from the tap, not from when the updater got to it
 function fromTap(p) {
@@ -957,9 +1017,10 @@ function actButton(p) {
   // (it can't update itself from outside its compose file)
   if (p.id === 'updater' && (S('updater_away') || S('updater_available') === 'unknown none')) return null;
   const a = avail(p.id);
-  // (OpenMower left out for the firmware: again after openmower update-firmware)
+  // (OpenMower left out for the firmware: again after openmower update-firmware. missing: its download again)
   const again = p.kind === 'openmower' && S('openmower_fw') ? 'Try again' : undefined;
-  const label = {yes: 'Update', switch: 'Switch', local: 'Replace with the official version', unknown: 'Update', '': 'Update', failed: again}[a];
+  const label = p.kind === 'openmower' && S('openmower_missing') ? 'Try again'
+    : {yes: 'Update', switch: 'Switch', local: 'Replace with the official version', unknown: 'Update', '': 'Update', failed: again}[a];
   if (!label) return null;
   return h('div', {class: 'act'},
     h('button', {class: 'control' + (a === 'yes' || a === 'switch' ? ' primary' : ''), 'data-key': 'now:' + p.id, disabled: busy(),
@@ -973,6 +1034,58 @@ function lineChange() {
     {from: from === '-' ? tr('older') : from, to}));
 }
 const failedHere = (where) => failed && failedFor === where && h('p', {class: 'warn'}, failed);
+// OpenMower without room for both versions: deleting the one that runs first, offered under its nospace, with what goes
+// (openmower_nokeep "yes <MB> <parts> <tags back> <tags for good>"), or why not
+const NOKEEP_NOT = {
+  prev: "the version that runs can't be downloaded again from its registry (built here, or no answer)",
+  env: "OpenMower's .env names another version than the one that runs",
+  registry: "the size of the new version isn't known",
+  holders: "it isn't known which images hold the version that runs",
+};
+const commas = (x) => (x && x !== '-' ? x.split(',') : []);
+// (the updater counts in MiB)
+const mib = (x) => (/^\d+$/.test(x || '') ? size(Number(x) * 1048576) : '?');
+function nokeepOffer(p) {
+  const [ok, a, b, c, d] = S(p.id + '_nokeep').split(' ');
+  const name = (id) => nameOf(PARTS().find((x) => x.id === id) || {id});
+  if (ok === 'no') {
+    const why = NOKEEP_NOT[a] ? tr(NOKEEP_NOT[a])
+      : a === 'room' ? tr("even then there isn't room enough (needs about {need}, {has} there)", {need: mib(b), has: mib(c)})
+      : a === 'box' ? tr('the container "{name}" uses the version that runs and the updater can\'t build it again', {name: b || '?'})
+      : a === 'base' ? tr('{name} is built on OpenMower and the version picked comes under another name', {name: name(b)})
+      : a === 'github' ? tr("it isn't known what to build of {name} (GitHub doesn't answer)", {name: name(b)})
+      : a || '?';
+    return dim(tr("Deleting the old version first isn't possible here: {why}.", {why}));
+  }
+  if (ok !== 'yes') return null;
+  const names = commas(b).map(name);
+  return [
+    h('p', {class: 'warn'}, tr("Both versions don't fit side by side. This way the version that runs is deleted first, then the new one downloaded ({size}). Until then the mower has no OpenMower and can't mow.",
+      {size: mib(a)})),
+    dim(tr("There's no way back on the mower itself: if the new one doesn't start, the updater downloads the old one again (that takes as long as the update and needs the internet).")),
+    names.length > 0 && dim(tr("What's built on OpenMower ({names}) is deleted with it and built again afterwards. If building fails, the mower can only mow again once it's built.", {names: names.join(', ')})),
+    commas(c).length > 0 && dim(tr('Deleted and downloaded or built again: {tags}.', {tags: commas(c).join(', ')})),
+    commas(d).length > 0 && dim(tr('Deleted for good: {tags}.', {tags: commas(d).join(', ')})),
+    h('div', {class: 'act'}, twoTaps('nokeep:' + p.id, tr('Delete the old version and update'), tr('Really delete it first?'), () => ask('nokeep=' + p.id))),
+  ];
+}
+// OpenMower missing after its update without a copy: when it tries again, and both ways by hand (openmower_missing
+// "<tries> <next> <new|back> <new version> <the one before by its digest> <its tag> <folder>")
+function missing() {
+  const [, next, way, target, prev, ref, dir] = S('openmower_missing').split(' ');
+  if (!ref) return null;
+  // (its .env names the tag of what it tries)
+  const env = way === 'back' ? ref : target;
+  const start = (tag) => (dir && dir !== '-' ? ' && cd ' + dir + (tag === env ? '' : " && sed -i 's/^VERSION=.*/VERSION=" + tag.split(':').pop() + "/' .env") + ' && docker compose up -d' : '');
+  const by = (key, said, text) => [dim(tr(said)), h('pre', {class: 'log'}, text), h('div', {class: 'act'}, copyButton('copy:missing-' + key, text))];
+  return [
+    h('p', {class: 'error'}, tr("OpenMower isn't on the mower right now, the mower can't mow.")),
+    dim(/^\d+$/.test(next || '') ? tr('Next try by itself: {when}.', {when: when(next)}) : tr('No more tries by itself: tap Try again.')),
+    // (on the way back the new one can't be had or didn't run)
+    ...(way === 'new' ? by('new', 'By hand in a terminal on the mower, the new version:', 'docker pull ' + target + start(target)) : []),
+    ...by('back', way === 'new' ? 'or the version before:' : 'By hand in a terminal on the mower, the version before:', 'docker pull ' + prev + ' && docker tag ' + prev + ' ' + ref + start(ref)),
+  ];
+}
 
 function partCard(p) {
   const id = p.id;
@@ -1029,6 +1142,8 @@ function partCard(p) {
     p.kind === 'openmower' && st.conf.openmower !== 'edge' && PARTS().some((x) => x.id === 'planner') &&
       h('p', {class: 'warn'}, tr("With this version the MowBite Planner doesn't work: it needs two changes that are only in edge so far (OM_PLANNER=external and keeping the planner's settings per area).")),
     p.kind === 'openmower' && ['yes', 'switch'].includes(avail(id)) && lineChange(),
+    p.kind === 'openmower' && missing(),
+    p.kind === 'openmower' && state === 'nospace' && !onBar(id) && nokeepOffer(p),
     p.kind === 'image' && st.conf[id] === 'stable' && S(id + '_stable_older') && state !== 'stable_older' &&
       dim(tr('stable {v} is older than what runs, it stays until a newer stable is out', {v: S(id + '_stable_older')})),
     p.kind === 'image' && avail(id) === 'local' && dim(tr("This version was built on its own, it isn't the official one.")),
@@ -1190,7 +1305,7 @@ function overview() {
   let one = null;
   for (const p of ALL()) {
     if (askedSince('back:' + p.id) !== null) one = one || {p, back: true};
-    else if (askedSince(p.id === 'updater' ? 'self' : 'now:' + p.id) !== null) one = one || {p};
+    else if (askedUpdate(p.id) !== null) one = one || {p};
   }
   // the parts that can't tell, as there was no answer from where they come from
   const remote = ALL().filter((p) => ['image', 'openmower', 'build'].includes(p.kind));

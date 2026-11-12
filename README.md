@@ -99,6 +99,10 @@ Without a check it waits for Docker's own health check, or else half a minute wi
 
 - **OpenMower:** it switches between edge, release (`latest`) and the version in its `.env` and updates only the
   OpenMower container. The MowBite Planner needs edge for now, the page warns you.
+- **OpenMower without room for two versions:** its card then offers to delete the version that runs first (and what's
+  built on it, like the planner) and download the new one, only when you tap it. Until it runs the mower can't mow.
+  If the new one doesn't start, the old one comes from its registry again. A download that fails is tried again every
+  10 minutes, 6 times, and the card shows the command to do it by hand.
 - **OpenMower and its firmware:** a new OpenMower that keeps the motors off because the firmware is too old goes back
   to the version before by itself, its card says so. Run `openmower update-firmware`, then tap "Try again". Before an
   update to another version line (1.3 to 1.4) the card warns you.
@@ -160,6 +164,8 @@ network.
   (a copy of its data back), `?check`, `?room`, `?free=img:<id>`, `?free=cache`, `?free=all`. Its own state is in `status` as `updater_running`, `updater_available`
   and `updater`. What came of an app last is `status.<app>`, from when `status.<app>_at` (unix time), the mower's time
   zone `status.clock` (`+0100`)
+- `POST ?nokeep=openmower`: OpenMower without a copy of the version that runs, only while `status.openmower_nokeep`
+  offers it (`yes ...`)
 
 </details>
 

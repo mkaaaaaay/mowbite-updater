@@ -7,8 +7,34 @@ PLANNER=${PLANNER_CONTAINER:-mowbite_planner}
 # the labels a container is looked after by: mowbite.update=on, and mowbite.update.<key> for the rest
 L=mowbite.update
 
-# a container's compose label (project, project.working_dir, project.config_files, service)
-label() { docker inspect -f "{{index .Config.Labels \"com.docker.compose.$2\"}}" "$1" 2>/dev/null; }
+# a container's compose label (project, project.working_dir, project.config_files, service), else as noted (gone_of)
+label() {
+  local v
+  # (docker says an empty line for one that isn't there)
+  if v=$(docker inspect -f "{{index .Config.Labels \"com.docker.compose.$2\"}}" "$1" 2>/dev/null); then echo "$v"; else gone_label "$1" "$2"; fi
+}
+# a container's compose labels in one go: project|folder|compose files|env files
+COMPOSE_LABELS='{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.project.working_dir"}}|{{index .Config.Labels "com.docker.compose.project.config_files"}}|{{index .Config.Labels "com.docker.compose.project.environment_file"}}'
+# a container removed for OpenMower's update without a copy (gone_<part>): "<container> <image> <running|stopped> <its
+# compose labels> <service> [<commit> <name> release|branch, what's built of it]"
+gone_of() { awk -v c="$1" '$1 ~ /^gone_/ && $2 == c {sub(/^[^ ]* /, ""); print; exit}' "$STATUS" 2>/dev/null; }
+gone() { [ -n "$(gone_of "$1")" ] && ! exists "$1"; }
+# its notes, "gone_<part> <container>" a line
+gone_list() { sed -n 's/^\(gone_[a-z0-9_]*\) \([^ ]*\) .*/\1 \2/p' "$STATUS" 2>/dev/null; }
+gone_label() {
+  local l n
+  l=$(gone_of "$1")
+  [ -n "$l" ] || return 1
+  case $2 in
+  service) echo "$l" | cut -d' ' -f5 && return ;;
+  project) n=1 ;;
+  project.working_dir) n=2 ;;
+  project.config_files) n=3 ;;
+  project.environment_file) n=4 ;;
+  *) return 1 ;;
+  esac
+  echo "$l" | cut -d' ' -f4 | cut -d'|' -f"$n"
+}
 # a container's own setting for the updater (mowbite.update.<key>)
 own() { docker inspect -f "{{index .Config.Labels \"$L.$2\"}}" "$1" 2>/dev/null; }
 exists() { docker inspect "$1" > /dev/null 2>&1; }
@@ -61,8 +87,7 @@ get() { sed -n "s/^$1 //p" "$STATUS" 2>/dev/null | head -n1; }
 compose() {
   local t="$1" c="$2" l project dir files envs
   shift 2
-  # (its labels in one go: project|folder|compose files|env files)
-  l=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.project.working_dir"}}|{{index .Config.Labels "com.docker.compose.project.config_files"}}|{{index .Config.Labels "com.docker.compose.project.environment_file"}}' "$c" 2>/dev/null)
+  l=$(docker inspect -f "$COMPOSE_LABELS" "$c" 2>/dev/null) || l=$(gone_of "$c" | cut -d' ' -f4)
   project=${l%%|*}
   l=${l#*|}
   dir=${l%%|*}

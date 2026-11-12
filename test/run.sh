@@ -304,7 +304,7 @@ move updater latest a
 REL=$(curl -sI -m 15 https://github.com/mkaaaaaay/mowbite/releases/latest | tr -d '\r' |
   sed -n 's|^[Ll]ocation: .*/releases/tag/v\{0,1\}\([^[:space:]?]*\).*|\1|p' | tail -n1)
 for v in v1 v2 v3 v4 v5 dl a3old a3new a3n1 a3n2; do img app "$v" run || bad "app:$v doesn't build"; done
-for v in o1 o2 o3 o4 o6 o7 o8 o9; do img om "$v" run || bad "om:$v doesn't build"; done
+for v in o1 o2 o3 o4 o6 o7 o8 o9 n1; do img om "$v" run || bad "om:$v doesn't build"; done
 img app broken crash && img om ox nostart && img om o5 bare && img mowbite m1 mowbite 9.0.0-beta.1 || bad "a test image doesn't build"
 img mowbite m2 mowbite 9.0.0-beta.2 && img mowbite m3 raise && img mowbite m4 touch || bad "a test image of MowBite doesn't build"
 # (made a second later than all before them: the first of another version line)
@@ -312,10 +312,12 @@ sleep 1
 img om f1 run && img om f2 run || bad "om:f1 or f2 doesn't build"
 [ $fails -eq 0 ] || exit 1
 O6=$(id_of "$REG/$P-om:o6")
+N1=$(id_of "$REG/$P-om:n1")
 forget app:dl
 forget om:o6
 forget om:o8
 forget om:o9
+forget om:n1
 publish v1
 move app 9.9.9 v2
 move app 0.0.1 a3old
@@ -1179,6 +1181,33 @@ O2=$(newest_of openmower)
 [ "$(in_kept "cat '$O2/why' && tar -xOf '$O2/1.tar' map.json" | tr '\n' ' ')" = 'put {"areas":["changed"]} ' ] && ok "the map it had kept first" ||
   bad "kept before: $O2"
 [ "$(kept_of openmower | wc -l)" -eq 2 ] && ok "the newest two copies" || bad "copies: $(kept_of openmower | tr '\n' ' ')"
+
+say "OpenMower without a copy, the planner built again on it"
+# (no room for two versions: what it needs said far more than there is, the room then as it is. the updater stopped
+# meanwhile, a one-off of its image with its settings on its folder does what its page asks for)
+move om edge n1
+om_ran=$(docker inspect -f '{{.Image}}' "$P-om")
+pl_ran=$(docker inspect -f '{{.Image}}' "$P-planner")
+docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$P-updater" > "$WORK/updater.env"
+uimg=$(docker inspect -f '{{.Image}}' "$P-updater")
+docker stop -t 5 "$P-updater" > /dev/null
+nokeep() {
+  docker run --rm --label "mbt.run=$P" --network host -v /var/run/docker.sock:/var/run/docker.sock -v "$STACKS:$STACKS" --env-file "$WORK/updater.env" \
+    -e "STATE_DIR=$STATE" -e UPDATER_NO_LOOP=1 --entrypoint sh "$uimg" -c ". /updater.sh; need_mb() { echo 999999; }; find_parts; $1"
+}
+r=$(nokeep 'MANUAL=1 WHY=request; update_part openmower; echo "$(get openmower | cut -d" " -f1)|$(get openmower_nokeep | cut -d" " -f1,3)"' | tail -n1)
+[ "$r" = "nospace|yes planner" ] && runs_on "$P-om" "$om_ran" && ok "no room for both: offered, nothing changed" || bad "offered: $r"
+r=$(nokeep 'MANUAL=1 NOKEEP=1 WHY=nokeep; update_part openmower; echo "$(get openmower | cut -d" " -f1)|$(get planner | cut -d" " -f1)|$(grep -c "^gone_\|^nokeep_\|^openmower_missing" "$STATUS")"' | tail -n1)
+[ "$r" = "updated|updated|0" ] && runs_on "$P-om" "$N1" && ok "the version that ran deleted first, the new one runs" || bad "without a copy: $r"
+[ "$(docker inspect -f '{{.State.Running}}' "$P-planner")" = true ] && ! docker image inspect "$om_ran" > /dev/null 2>&1 &&
+  ! docker image inspect "$pl_ran" > /dev/null 2>&1 && ok "the planner built again on it, what ran before gone" ||
+  bad "the planner: $(docker inspect -f '{{.State.Status}} {{.Image}}' "$P-planner"), before: $(docker images -q "$om_ran" "$pl_ran" | tr '\n' ' ')"
+docker start "$P-updater" > /dev/null
+until_true "int(s.get('checked', 0)) >= int(s.get('started', '0').split(' ')[0]) and not s.get('looking')" 180 &&
+  [ "$(val "s.get('planner_base_id')")" = "$N1" ] && ok "the updater on again, the planner on the new version" ||
+  bad "the planner on $(val "s.get('planner_base_id')")"
+[ "$(envv)" = '"edge"' ] && [ "$(cat "$WORK/ros/map.json")" = '{"areas":["front"]}' ] && [ "$(newest_of openmower)" != "$O2" ] &&
+  ok "its .env and map as they were, its data kept before" || bad "its .env $(envv), map $(cat "$WORK/ros/map.json"), kept $(newest_of openmower)"
 
 say "the night"
 move om edge o7

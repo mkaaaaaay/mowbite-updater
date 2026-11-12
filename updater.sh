@@ -31,6 +31,9 @@ WINDOW=180
 # MB free a part needs before it starts (OpenMower: its download x5 and 1 GB more)
 ROOM_APP=300
 ROOM_BUILD=800
+# OpenMower updated without a copy and not there or not seen running: looked at again every 10 minutes, a download 6 times
+NOKEEP_EVERY=600
+NOKEEP_TRIES=6
 # seconds anything over the network or with docker may take, so nothing hangs for good
 T_REGISTRY=60
 T_PULL=1800
@@ -114,6 +117,8 @@ om_brokers() {
   local p host port prefix user pass login
   own_broker
   if ! p=$(timeout 20 docker exec "$OM" bash -lc '. /opt/open_mower_ros/devel/setup.bash && rosparam get /xbot_monitoring' 2> /dev/null); then
+    # (removed for its update without a copy: it sends nowhere)
+    gone "$OM" && return 2
     case $(mower) in "" | "0 unknown") return 2 ;; *) return 1 ;; esac
   fi
   case $(pval "$p" external_mqtt_enable) in true | True | 1) ;; *) return 0 ;; esac
@@ -229,7 +234,10 @@ fw_blocked() {
 # --- containers and images ---
 
 image_of() { docker inspect -f '{{.Image}}' "$1" 2>/dev/null; }
-ref_of() { docker inspect -f '{{.Config.Image}}' "$1" 2>/dev/null; }
+ref_of() {
+  local r
+  if r=$(docker inspect -f '{{.Config.Image}}' "$1" 2>/dev/null); then echo "$r"; else gone_of "$1" | cut -d' ' -f2; fi
+}
 id_of() { docker image inspect -f '{{.Id}}' "$1" 2>/dev/null; }
 # (a container waiting for its next restart counts as running for docker, not here)
 running() { [ "$(docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null)" = running ]; }
@@ -328,7 +336,17 @@ find_parts() {
   local out="" c x id far="" picked cand mine
   # (itself, also by its image: under another name it isn't an app to update from inside)
   mine=$(repo_of "$(ref_of "$ME")")
-  if exists "$OM" && in_compose "$OM"; then
+  # (one removed for OpenMower's update without a copy that's there again: its note goes, not while they're removed)
+  case $(get nokeep_openmower) in
+  rm\ *) ;;
+  *) gone_list | while read -r x c; do exists "$c" && status "$x"; done ;;
+  esac
+  # (left by a stop right before such an update started)
+  if ! nokeep_busy; then
+    status nokeep_holders
+    [ -n "$(get pending_openmower)" ] || status openmower_fw_check
+  fi
+  if { exists "$OM" || gone "$OM"; } && in_compose "$OM"; then
     out="openmower:$OM:openmower"
   elif new_os; then
     out="openmower:-:os"
@@ -352,7 +370,7 @@ find_parts() {
   status xtechapp_name "OpenMower App (xtech)"
   status openmowerapp_name OpenMowerApp
   for c in "$APP" "$PLANNER"; do
-    exists "$c" || continue
+    exists "$c" || gone "$c" || continue
     in_compose "$c" || { far="$far$(away "$c")"; continue; }
     if [ "$c" = "$APP" ]; then id=mowbite; else id=planner; fi
     out="$out $id:$c:$(kind_of "$c" "$id")"
@@ -366,6 +384,7 @@ find_parts() {
   for c in $({
     docker ps -a --filter "label=$L=on" --format '{{.Names}}'
     for x in $picked; do exists "$x" && echo "$x"; done
+    gone_list | cut -d' ' -f2
   } | awk '!seen[$0]++'); do
     case $c in "$OM" | "$APP" | "$PLANNER" | "$ME") continue ;; esac
     [ -n "$mine" ] && [ "$(repo_of "$(ref_of "$c")")" = "$mine" ] && continue
@@ -798,6 +817,12 @@ layers() {
     }'
 }
 
+# the layers of the newest image of ref for this machine as docker keeps them (its diff ids), one a line. (an image for
+# one platform only has no list of platforms to pick from)
+diff_ids() {
+  { timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format "{{json (index .Image \"linux/$(arch)\").RootFS.DiffIDs}}" 2>/dev/null ||
+    timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format '{{json .Image.RootFS.DiffIDs}}' 2>/dev/null; } | tr -d '[]" ' | tr ',' '\n' | grep .
+}
 # the MB the newest image of ref needs that the local image doesn't have yet: its missing layers, packed size x5.
 # nothing when any of it can't be had: then there's no telling, and that's no room. its layers from the file $3 when
 # they were just looked up
@@ -805,9 +830,7 @@ need_mb() {
   have=$(docker image inspect -f '{{range .RootFS.Layers}}{{.}} {{end}}' "$2" 2>/dev/null)
   ids=$(mktemp)
   sizes=$(mktemp)
-  # (an image for one platform only has no list of platforms to pick from)
-  { timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format "{{json (index .Image \"linux/$(arch)\").RootFS.DiffIDs}}" 2>/dev/null ||
-    timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format '{{json .Image.RootFS.DiffIDs}}' 2>/dev/null; } | tr -d '[]" ' | tr ',' '\n' | grep . > "$ids"
+  diff_ids "$1" > "$ids"
   if [ -s "${3:-}" ]; then cut -d' ' -f2 "$3"; else layers "$1" | cut -d' ' -f2; fi > "$sizes"
   if [ -s "$ids" ] && [ "$(wc -l < "$ids")" -eq "$(wc -l < "$sizes")" ]; then
     paste -d' ' "$ids" "$sizes" | awk -v have=" $have " '{ if (index(have, " " $1 " ") == 0) s += $2 } END { printf "%d\n", s * 5 / 1048576 }'
@@ -1280,11 +1303,28 @@ check_om_line() {
   return 0
 }
 
+# what of OpenMower's new version (its id $1) is left out besides its id when it doesn't run: the digests it came with
+# from $2, the tag may have moved on since it was looked at. the registry's own ($3) last, openmower_fw goes by it: the
+# classic store lists an image's digests in no fixed order
+om_digests() { digests_in "$1" "$2" | tr ' ' '\n' | awk -v r="$3" 'NF && $0 != r {printf "%s%s", s, $0; s = " "} END {if (r != "") printf "%s%s", s, r}'; }
+
 check_openmower() {
   local cur x
   if [ "$(kind openmower)" = os ]; then
     status openmower_running os
     status openmower_available os
+    return
+  fi
+  # (its update without a copy not done yet: there's something to do, nothing to go back to)
+  if nokeep_busy; then
+    if gone "$OM"; then
+      status openmower_running missing
+    else
+      status openmower_running "$(ref_of "$OM" | sed 's/.*://')" "$(day_of "$(image_of "$OM")")"
+    fi
+    status openmower_available yes "$(get nokeep_openmower | cut -d' ' -f2)"
+    status openmower_back no
+    status openmower_line
     return
   fi
   cur=$(ref_of "$OM")
@@ -1308,7 +1348,7 @@ check_openmower() {
 # or one that was due on that image (<part>_rebuild: its id, noted before it waits). never while the mower isn't idle
 # in the dock (a build takes its cpu): 2 then
 rebuild_on_om() {
-  local p base rc=0
+  local p x base rc=0
   for p in $(part_ids); do
     [ "$(kind "$p")" = build ] && [ -z "$(get "pending_$p")" ] || continue
     base=$(base_of "$(box "$p")")
@@ -1316,10 +1356,15 @@ rebuild_on_om() {
       [ -n "$base" ] && [ -n "$2" ] && log "$p: built on $base, not on $1, left as it is"
       continue
     fi
-    [ "$(get "${p}_base_id")" != "$(id_of "$1")" ] || continue
+    # (one removed with OpenMower's version before: built again whatever its base)
+    gone "$(box "$p")" || [ "$(get "${p}_base_id")" != "$(id_of "$1")" ] || continue
     [ -n "$2" ] || [ -n "$(get "${p}_base_id")" ] || [ "$(get "${p}_rebuild")" = "$(id_of "$1")" ] || continue
     status "${p}_rebuild" "$(id_of "$1")"
-    docked || { log "$p: the mower isn't idle in the dock, built on OpenMower's new version later"; return 2; }
+    if ! docked; then
+      log "$p: the mower isn't idle in the dock, built on OpenMower's new version later"
+      for x in $(noted); do gone "$(box "$x")" && outcome "$x" error gone_dock; done
+      return 2
+    fi
     build "$p" after_openmower
     [ $? -eq 2 ] && rc=2
     # (not once more in the same run)
@@ -1331,6 +1376,9 @@ rebuild_on_om() {
 update_openmower() {
   local ref repo before old_version want target remote need free back rc prev d pd at
   [ "$(kind openmower)" = openmower ] || return 0
+  # (its update without a copy: on from where it is)
+  ! nokeep_busy || { nokeep_on; return; }
+  status openmower_nokeep
   progress openmower prepare
   running "$OM" || { log "openmower: not running, left as it is"; outcome openmower stopped; return 0; }
   ref=$(ref_of "$OM")
@@ -1380,6 +1428,9 @@ update_openmower() {
   if [ -z "$need" ] || [ -z "$free" ] || [ $((need + 1024)) -gt "$free" ]; then
     log "openmower: not enough room for $target (needs ${need:-?} MB and 1 GB to spare, ${free:-?} MB free), it stays as it is"
     outcome openmower nospace "${need:-?}" "${free:-?}"
+    # (without a copy of the version that runs: offered on its card, done when asked for)
+    [ -z "$NOKEEP" ] || { nokeep_openmower "$target" "$before" "$ref" "$repo" "$remote"; return; }
+    nokeep_look "$target" "$before" "$ref" "$repo"
     return 1
   fi
   back=$(keep_back "$repo" "$before" openmower)
@@ -1446,9 +1497,7 @@ update_openmower() {
   # (its way back by hand: the version before, from its registry again)
   prev=$(prev_of "$before" "$repo")
   d=$(id_of "$target")
-  # (left out when it doesn't run: its id and the digests it came with, the tag may have moved on since it was looked at.
-  # the registry's own last, openmower_fw goes by it: the classic store lists an image's digests in no fixed order)
-  pd=$(digests_in "$d" "$repo" | tr ' ' '\n' | awk -v r="$remote" 'NF && $0 != r {printf "%s%s", s, $0; s = " "} END {if (r != "") printf "%s%s", s, r}')
+  pd=$(om_digests "$d" "$repo" "$remote")
   # (the motors kept off for the firmware already: not the new version's doing)
   if fw_blocked; then
     log "openmower: the motors are off for the firmware already, the new version isn't checked for it"
@@ -1488,6 +1537,11 @@ update_openmower() {
 # of the automatic updates, it runs again when the one before doesn't answer
 back_openmower() {
   local ref repo before prev need free back d
+  if nokeep_busy; then
+    log "openmower: its update without a copy isn't done, that goes on first"
+    outcome openmower error nokeep
+    return 1
+  fi
   ref=$(ref_of "$OM")
   repo=$(repo_of "$ref")
   before=$(image_of "$OM")
@@ -1539,6 +1593,344 @@ back_openmower() {
   fi
   unhold
   return 1
+}
+
+# --- OpenMower without a copy ---
+
+# OpenMower's new version ($1) without room next to the one that runs ($2, under its tag $3 from repository $4): whether
+# that one can go first, for its card. nk_prev its way back, nk_holders the images with a layer of it the new one hasn't,
+# nk_parts and nk_wants the builds on them ("<part> <commit> <name> <how>" a line)
+# form: status openmower_nokeep yes <MB downloaded> <parts built again, commas, or -> <tags back afterwards, commas, or -> <tags gone for good, commas, or ->
+# form: status openmower_nokeep no prev|env|registry|holders|room <MB needed> <MB there>|box <container>|base <part>|github <part>
+nokeep_look() {
+  local target="$1" before="$2" ref="$3" repo="$4" new only has s need c p w back='' all
+  nk_holders=
+  nk_parts=
+  nk_wants=
+  nk_prev=$(prev_of "$before" "$repo")
+  if [ -z "$nk_prev" ] || ! in_registry "$nk_prev"; then status openmower_nokeep no prev; return 1; fi
+  if [ "$repo:${ref##*:}" != "$ref" ] || [ "$(om_version)" != "${ref##*:}" ]; then status openmower_nokeep no env; return 1; fi
+  layers "$target" > "$STATE/layers"
+  new=" $(diff_ids "$target" | tr '\n' ' ')"
+  if [ ! -s "$STATE/layers" ] || [ "$new" = " " ]; then status openmower_nokeep no registry; return 1; fi
+  only=$(docker image inspect -f '{{range .RootFS.Layers}}{{.}} {{end}}' "$before" 2>/dev/null |
+    awk -v n="$new" '{for (i = 1; i <= NF; i++) if (!index(n, " " $i " ")) printf "%s ", $i}')
+  # (what's free, the build cache and the image that runs against the new one's layers x5 and 1 GB more)
+  has=$(free_mb)
+  has=$((${has:-0} + $(sed -n 's/^cache //p' "$STATE/room" 2>/dev/null | grep -x '[0-9][0-9]*' || echo 0) / 1048576))
+  s=$(docker image inspect -f '{{.Size}}' "$before" 2>/dev/null | grep -x '[0-9][0-9]*') || s=0
+  [ -z "$only" ] || has=$((has + s / 1048576))
+  need=$(awk '{s += $2} END {printf "%d\n", s * 5 / 1048576 + 1024}' "$STATE/layers")
+  if [ -z "$only" ] || [ "$has" -lt "$need" ]; then status openmower_nokeep no room "$need" "$has"; return 1; fi
+  nk_holders=$(docker images -aq --no-trunc 2>/dev/null | sort -u | xargs -r docker image inspect -f '{{.Id}} {{range .RootFS.Layers}}{{.}} {{end}}' 2>/dev/null |
+    awk -v only=" $only" '{for (i = 2; i <= NF; i++) if (index(only, " " $i " ")) {print $1; next}}')
+  if ! printf '%s\n' "$nk_holders" | grep -qxF -- "$before"; then status openmower_nokeep no holders; return 1; fi
+  [ "$target" != "$ref" ] || back=$ref
+  for c in $(docker ps -aq --no-trunc 2>/dev/null | xargs -r docker inspect -f '{{.Image}} {{.Name}}' 2>/dev/null |
+    awk -v h=" $(printf '%s' "$nk_holders" | tr '\n' ' ') " 'index(h, " " $1 " ") {sub(/^\//, "", $2); print $2}'); do
+    [ "$c" != "$OM" ] || continue
+    p=$(get parts | tr ' ' '\n' | awk -F: -v c="$c" '$2 == c && $3 == "build" {print $1; exit}')
+    if [ -z "$p" ] || [ "$(base_of "$c")" != "$ref" ]; then status openmower_nokeep no box "$c"; return 1; fi
+    # (built again on the new version only when that comes under the same tag)
+    [ "$target" = "$ref" ] || { status openmower_nokeep no base "$p"; return 1; }
+    w=$(want_of "$p") || w=
+    [ -n "$w" ] || [ -z "$(built_of "$p")" ] || [ -z "$(get "${p}_release")" ] || w="$(built_of "$p") $(get "${p}_release") release"
+    [ -n "$w" ] || { status openmower_nokeep no github "$p"; return 1; }
+    nk_parts="$nk_parts $p"
+    nk_wants="$nk_wants$p $w
+"
+    back="$back,$(ref_of "$c")"
+  done
+  all=$(for c in $nk_holders; do tags_of "$c"; done | tr ' ' '\n' | grep . | sort -u)
+  status openmower_nokeep yes "$(awk '{s += $2} END {printf "%d\n", s / 1048576}' "$STATE/layers")" \
+    "$(printf '%s' "$nk_parts" | sed 's/^ //; s/ /,/g' | grep . || echo -)" "${back:--}" \
+    "$(printf '%s\n' "$all" | awk -v k=",$back," 'NF && !index(k, "," $0 ",")' | tr '\n' ',' | sed 's/,$//' | grep . || echo -)"
+}
+# a part's container noted before it's removed (gone_<part>), with what's to be built of it ($2). 1 when it can't be
+gone_note() {
+  local c ref st l s
+  c=$(box "$1")
+  ref=$(docker inspect -f '{{.Config.Image}}' "$c" 2>/dev/null) && st=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null) &&
+    l=$(docker inspect -f "$COMPOSE_LABELS" "$c" 2>/dev/null) && s=$(service "$c") || return 1
+  [ -n "$ref" ] && [ -n "$s" ] && [ -n "${l%%|*}" ] || return 1
+  [ "$st" = running ] || st=stopped
+  # shellcheck disable=SC2086
+  status "gone_$1" "$c" "$ref" "$st" "$l" "$s" $2
+  [ -n "$(get "gone_$1")" ]
+}
+# the builds noted for it
+noted() { sed -n 's/^gone_\([a-z0-9_]*\) .*/\1/p' "$STATUS" 2> /dev/null | grep -vx openmower; }
+# a container stopped and removed through its stack, never its volumes (no -v)
+box_rm() {
+  compose $T_UP "$1" rm -s -f "$(service "$1")" >> "$LOG" 2>&1
+  ! exists "$1"
+}
+tags_of() { docker image inspect -f '{{range .RepoTags}}{{.}} {{end}}' "$1" 2>/dev/null; }
+# an image deleted, each of its tags and then itself, never forced: one a container still uses stays
+drop_image() {
+  local t
+  for t in $(tags_of "$1"); do
+    docker rmi "$t" > /dev/null 2>&1 && log "removed $t"
+  done
+  docker rmi "$1" > /dev/null 2>&1 && log "removed $1"
+  return 0
+}
+# its notes gone, once OpenMower is there again ($1 all: the builds' too)
+nokeep_off() {
+  local p
+  [ -z "${1:-}" ] || for p in $(noted); do status "gone_$p"; done
+  exists "$OM" && status gone_openmower
+  status nokeep_openmower
+  status nokeep_holders
+  status openmower_missing
+  status openmower_fw_check
+}
+# OpenMower's update without a copy not done
+nokeep_busy() { [ -n "$(get nokeep_openmower)" ]; }
+nokeep_open() { [ "$1" = openmower ] && nokeep_busy; }
+
+# asked for: the offer, the dock, the hold, its data and its way back checked once more, all it needs noted, then on
+nokeep_openmower() {
+  local target="$1" before="$2" ref="$3" repo="$4" remote="$5" p ok=1 fw=on
+  check_room
+  if ! nokeep_look "$target" "$before" "$ref" "$repo"; then
+    log "openmower: not without a copy either ($(get openmower_nokeep | cut -d' ' -f2-)), it stays as it is"
+    return 1
+  fi
+  hold openmower || { outcome openmower error hold; return 1; }
+  if ! docked; then
+    unhold
+    log "openmower: the mower left the dock, it stays as it is"
+    return 2
+  fi
+  if ! keep_data openmower update; then
+    unhold
+    outcome openmower error data
+    return 1
+  fi
+  # (the motors kept off for the firmware already: not the new version's doing)
+  fw_blocked && fw=off
+  # the last word before anything goes: the version that runs still in its registry
+  if ! in_registry "$nk_prev"; then
+    unhold
+    log "openmower: $nk_prev can't be had from its registry right now, nothing deleted"
+    outcome openmower error registry
+    return 1
+  fi
+  for p in $nk_parts openmower; do gone_note "$p" "$(printf '%s' "$nk_wants" | sed -n "s/^$p //p")" || ok=; done
+  status openmower_fw_check "$fw"
+  # shellcheck disable=SC2086
+  status nokeep_holders $nk_holders
+  status nokeep_openmower rm "$target" "$nk_prev" "$ref" "${remote:--}"
+  if [ -z "$ok" ] || ! nokeep_busy || [ -z "$(get nokeep_holders)" ]; then
+    nokeep_off all
+    unhold
+    log "openmower: what it needs to finish can't be noted, nothing deleted"
+    outcome openmower error keep
+    return 1
+  fi
+  status openmower_nokeep
+  log "openmower: $ref -> $target without a copy, the version that runs and what's built on it deleted first"
+  outcome openmower replacing
+  nokeep_on
+}
+# form: status nokeep_openmower rm|drop|new|back <new tag> <the one before by digest> <its tag> <the new one's digest, or -> [<its image id, or -> <why back>]
+# on from its step: containers removed, images deleted, the new version or the one before; not seen running: again later
+nokeep_on() {
+  local rc
+  progress openmower prepare
+  case $(get nokeep_openmower | cut -d' ' -f1) in
+  rm) nokeep_rm && nokeep_drop && nokeep_go ;;
+  drop) nokeep_drop && nokeep_go ;;
+  *) nokeep_go ;;
+  esac
+  rc=$?
+  if exists "$OM"; then
+    status openmower_missing
+    ! nokeep_busy || nk_next=$(($(now) + NOKEEP_EVERY))
+  fi
+  return $rc
+}
+# the containers noted removed, the builds' first, OpenMower's last while it doesn't drive the mower. one that can't be:
+# the ones removed back as they were, nothing deleted
+nokeep_rm() {
+  local p c at why=
+  if exists "$OM"; then
+    if [ -z "$held" ] && ! hold openmower; then why=hold; elif ! docked; then why=not_docked; elif at=$(soon); then why="schedule $at"; fi
+  fi
+  [ -n "$why" ] || for p in $(noted) openmower; do
+    c=$(get "gone_$p" | cut -d' ' -f1)
+    [ -n "$c" ] && exists "$c" || continue
+    box_rm "$c" || { log "$p: its container $c can't be removed"; why=remove; break; }
+  done
+  # (the last word before the images go, also when it goes on after a stop)
+  [ -n "$why" ] || in_registry "$(get nokeep_openmower | cut -d' ' -f3)" || why=registry
+  if [ -n "$why" ]; then
+    log "openmower: stopped before anything was deleted ($why), the containers removed come back"
+    nokeep_undo
+    if [ -n "$(noted)$(get gone_openmower)" ]; then outcome openmower error undo; else outcome openmower error "$why"; fi
+    return 1
+  fi
+  status nokeep_openmower drop "$(get nokeep_openmower | cut -d' ' -f2-)"
+}
+# the containers removed so far made again on the images they ran on, started when they ran, the notes gone
+nokeep_undo() {
+  local p c
+  for p in openmower $(noted); do
+    c=$(get "gone_$p" | cut -d' ' -f1)
+    [ -n "$c" ] && ! exists "$c" || continue
+    if [ "$(get "gone_$p" | cut -d' ' -f3)" = stopped ]; then
+      compose $T_UP "$c" up --no-start --no-deps --no-build --pull never "$(service "$c")" >> "$LOG" 2>&1
+    else
+      { [ "$p" != openmower ] || [ -n "$held" ] || hold openmower; } && restart "$p" "$(id_of "$(ref_of "$c")")"
+    fi || log "$p: $c couldn't be made again"
+  done
+  # (the note of one that isn't there stays: its card and its update know it by that)
+  for p in $(noted); do exists "$(get "gone_$p" | cut -d' ' -f1)" && status "gone_$p"; done
+  nokeep_off
+  unhold
+}
+# what holds the layers of the version before deleted (twice: an image built on another goes only after it), the build
+# cache cleared
+nokeep_drop() {
+  local i x
+  for i in 1 2; do for x in $(get nokeep_holders); do drop_image "$x"; done; done
+  # (a test on a pc with builds of its own: PRUNE=0)
+  [ "${PRUNE:-1}" = 0 ] || timeout $T_UP docker builder prune -af > /dev/null 2>&1
+  log "openmower: the version before deleted, $(free_mb) MB free"
+  status nokeep_openmower new "$(get nokeep_openmower | cut -d' ' -f2-)"
+  status nokeep_holders
+}
+# downloaded, started and seen running, else the one before the same way. one already there only while it doesn't mow
+nokeep_go() {
+  local way target prev ref remote new why pull tag left d fw='' data=''
+  # shellcheck disable=SC2046
+  set -- $(get nokeep_openmower)
+  way=$1 target=$2 prev=$3 ref=$4 remote=$5 new=${6:--} why=${7:-}
+  [ "$remote" != - ] || remote=
+  if [ "$way" = back ]; then pull=$prev tag=$ref; else pull=$target tag=$target; fi
+  if exists "$OM"; then
+    [ -n "$held" ] || hold openmower || { outcome openmower error hold; return 1; }
+    if ! quiet; then
+      log "openmower: started on $tag and not seen running yet, the mower isn't idle: looked at again later"
+      outcome openmower unconfirmed
+      return 2
+    fi
+    if [ "$way" = back ] && [ "$(image_of "$OM")" = "$new" ] && ! { gone_note openmower && box_rm "$OM"; }; then
+      log "openmower: the new version's container can't be removed"
+      outcome openmower error rollback
+      return 1
+    fi
+  fi
+  [ "$way" = new ] || [ "$new" = - ] || drop_image "$new"
+  if ! exists "$OM"; then
+    # (at night only the tries due, those come by themselves)
+    if [ "$WHY" = night ] && [ -n "$(get openmower_missing)" ]; then
+      log "openmower: isn't on the mower, left to its next try or a tap on its card"
+      return 1
+    fi
+    # (by hand it's then only the download and a start)
+    if [ "$(om_version)" != "${tag##*:}" ] && ! { set_om_version "${tag##*:}" && keep_change openmower; }; then
+      log "openmower: VERSION in $(om_env) can't be changed"
+      nokeep_missing
+      return 1
+    fi
+    log "openmower: downloading $pull"
+    if ! with_progress openmower none pull_image "$pull" || { [ "$way" = back ] && ! docker tag "$prev" "$ref"; }; then
+      if [ "$way" = new ] && why=$(nokeep_never "$pull"); then
+        log "openmower: $target can't be downloaded ($why), back to $prev from its registry"
+        status nokeep_openmower back "$target" "$prev" "$ref" "${remote:--}" - "$why"
+        progress openmower back
+        nokeep_go
+        return
+      fi
+      log "openmower: the download of $pull failed"
+      nokeep_missing
+      return 1
+    fi
+    # (held anew right before its start where a broker answers, nothing drives the mower meanwhile)
+    unhold
+    hold openmower || log "openmower: MowBite's schedule isn't held, started all the same"
+  fi
+  if restart openmower "$(id_of "$tag")"; then
+    nokeep_off
+    # (the version before started by hand under the same tag)
+    if [ "$way" = new ] && digests "$(image_of "$OM")" | tr ' ' '\n' | grep -qxF "$prev"; then
+      way=back
+      why=hand
+    fi
+    if [ "$way" = new ]; then
+      status openmower_fw
+      status openmower_prev "$prev"
+      log "openmower: updated to $target, without a copy of the version before"
+      outcome openmower updated "$(now)" "${target##*:}"
+      status openmower_available no "$target"
+      rebuild_on_om "$target" new
+      return
+    fi
+    [ -z "$(get openmower_fw)" ] || fw=1
+    # (its data in a format the new version raised: back as it was before the update)
+    if d=$(newer_data openmower); then
+      if put_data openmower "$d" && restart_same openmower; then data=data; else data=failed; fi
+    fi
+    if [ "$data" = failed ]; then
+      outcome openmower error data_put
+    elif [ -n "$why" ]; then
+      outcome openmower rolled_back "$why"
+    else
+      outcome openmower rolled_back ${fw:+"firmware"} ${data:+"$data"}
+    fi
+    rebuild_on_om "$ref" new
+    return 1
+  fi
+  if [ "$way" = back ]; then
+    # (one compose couldn't make is tried again)
+    exists "$OM" || { nokeep_missing; return 1; }
+    log "openmower: the version before didn't run either"
+    nokeep_off
+    outcome openmower error rollback
+    rebuild_on_om "$ref" new
+    return 1
+  fi
+  # the new version didn't run: left out as after any update, the one before from its registry again
+  fw=$fw_failed
+  new=$(id_of "$target")
+  left=$new
+  d=$(om_digests "$new" "$(repo_of "$target")" "$remote")
+  [ -z "$d" ] || left="$left $d"
+  status openmower_failed "$left"
+  status openmower_fw_check
+  if [ -n "$fw" ]; then status openmower_fw "${left##* }"; else status openmower_fw; fi
+  status nokeep_openmower back "$target" "$prev" "$ref" "${remote:--}" "${new:--}"
+  log "openmower: $target didn't run, back to $prev from its registry"
+  progress openmower back
+  nokeep_go
+}
+# why a download of the new version can never work as it is, from what compose said since "downloading <ref>" in the
+# log: no room left (nospace), its registry doesn't have it or lets nobody have it (unknown)
+nokeep_never() {
+  case $(awk -v m="openmower: downloading $1" 'index($0, m) {t = ""; s = 1; next} s {t = t $0 "\n"} END {printf "%s", t}' "$LOG") in
+  *"no space left"*) echo nospace ;;
+  *"manifest unknown"* | *"not found"* | *denied*) echo unknown ;;
+  *) return 1 ;;
+  esac
+}
+# OpenMower's container missing: said on its card with the ways by hand, tried again at the updater's start and every
+# NOKEEP_EVERY seconds up to NOKEEP_TRIES times by itself (a tap starts them anew)
+# form: status openmower_missing <tries> <next try, unix s, or -> <new|back, what it downloads> <the new version> <the one before by its digest> <the tag it ran under> <its stack's folder, or ->
+nokeep_missing() {
+  local n next=-
+  n=$(get openmower_missing | cut -d' ' -f1 | grep -x '[0-9][0-9]*' || echo 0)
+  case $WHY in again) n=$((n + 1)) ;; request | nokeep) n=0 ;; esac
+  [ "$n" -lt "$NOKEEP_TRIES" ] && next=$(($(now) + NOKEEP_EVERY))
+  # shellcheck disable=SC2046
+  status openmower_missing "$n" "$next" $(get nokeep_openmower | cut -d' ' -f1-4) "$(label "$OM" project.working_dir | grep . || echo -)"
+  outcome openmower error missing
+  if [ "$next" = - ]; then
+    log "openmower: isn't on the mower, no more tries by itself, a tap on its card goes on"
+  else
+    log "openmower: isn't on the mower, tried again at $(date -d "@$next" '+%F %T') (try $((n + 1)) of $NOKEEP_TRIES by itself)"
+  fi
 }
 
 # --- a calibration: values measured on the mower written into OpenMower's mower_params.yaml ---
@@ -1742,10 +2134,12 @@ build_key() { echo "$1${2:+ $(id_of "$2")}"; }
 # built again from its own context and started, at the commit want_of says ($3, "<commit> <name> release|branch"; on
 # OpenMower's new version without it: what it says now, else the commit it runs). never --pull, and only when the image
 # it's built on is here (for the planner: OpenMower's, it has to be built on the one that runs, a missing one would come
-# down whole). one stopped by hand is made anew on it and stays stopped
+# down whole). one stopped by hand is made anew on it and stays stopped. one removed with OpenMower's version before
+# (gone_<part>) is built anew from what was noted then, nothing to go back to: not started it stays removed
 build() {
-  local p="$1" c base commit name how ctx img before ran back rc built fail stopped=
+  local p="$1" c base commit name how ctx img before ran back rc built fail stopped='' new=''
   c=$(box "$p")
+  gone "$c" && new=1
   progress "$p" prepare
   base=$(base_of "$c")
   if [ -n "$base" ] && ! docker image inspect "$base" > /dev/null 2>&1; then
@@ -1754,6 +2148,7 @@ build() {
     return 1
   fi
   room_for $ROOM_BUILD || { log "$p: less than $ROOM_BUILD MB free, not built"; outcome "$p" nospace $ROOM_BUILD "$(free_mb)"; return 1; }
+  [ -n "${3:-}" ] || [ -z "$new" ] || set -- "$1" "$2" "$(gone_of "$c" | cut -d' ' -f6-)"
   # shellcheck disable=SC2046,SC2086
   set -- "$1" "$2" ${3:-$(want_of "$p")}
   commit=$3 name=${4:-} how=${5:-}
@@ -1771,31 +2166,37 @@ build() {
   fail=
   [ -n "$commit" ] && fail=$(build_key "$commit" "$base")
   # (also the one after OpenMower's update: the same commit on the same base didn't start before)
-  if [ -n "$fail" ] && [ "$fail" = "$(get "${p}_failed")" ]; then
+  if [ -z "$new" ] && [ -n "$fail" ] && [ "$fail" = "$(get "${p}_failed")" ]; then
     log "$p: not again, $(echo "$commit" | cut -c1-7) didn't start before on this base"
     outcome "$p" skipped_failed
     return 0
   fi
-  case $(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null) in exited | created | dead) stopped=1 ;; esac
   img=$(ref_of "$c")
-  before=$(image_of "$c")
-  ran=$before
-  # an image that ran and isn't there any more (built again with the same content, its tag went on and docker dropped
-  # it while it ran): the one its tag names is the way back, the same a restart would run
-  if ! docker image inspect "$before" > /dev/null 2>&1; then
-    before=$(id_of "$img")
-    [ -n "$before" ] && log "$p: the image it runs isn't there any more, the one its tag names is the way back"
+  if [ -n "$new" ]; then
+    [ "$(gone_of "$c" | cut -d' ' -f3)" = stopped ] && stopped=1
+    back=
+    log "$p: removed with OpenMower's version before, building ($2)"
+  else
+    case $(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null) in exited | created | dead) stopped=1 ;; esac
+    before=$(image_of "$c")
+    ran=$before
+    # an image that ran and isn't there any more (built again with the same content, its tag went on and docker dropped
+    # it while it ran): the one its tag names is the way back, the same a restart would run
+    if ! docker image inspect "$before" > /dev/null 2>&1; then
+      before=$(id_of "$img")
+      [ -n "$before" ] && log "$p: the image it runs isn't there any more, the one its tag names is the way back"
+    fi
+    back=$(keep_back "$(repo_of "$img")" "$before" "$p")
+    [ -n "$back" ] || { log "$p: the version before can't be kept, not built"; outcome "$p" error keep; return 1; }
+    log "$p: kept the version before as $back, building ($2)"
   fi
-  back=$(keep_back "$(repo_of "$img")" "$before" "$p")
-  [ -n "$back" ] || { log "$p: the version before can't be kept, not built"; outcome "$p" error keep; return 1; }
-  log "$p: kept the version before as $back, building ($2)"
   : > "$STATE/layers"
   ctx=
   [ -n "$commit" ] && ctx=$(context_file "$p" "$commit")
   with_progress "$p" "$(gate "$p")" compose $T_BUILD "$c" ${ctx:+-f "$ctx"} --progress json build "$(service "$c")"
   rc=$?
   [ -n "$ctx" ] && rm -f "$ctx"
-  [ $rc -eq 0 ] || [ $rc -eq 2 ] || log "$p: the build failed, the one before keeps running"
+  [ $rc -eq 0 ] || [ $rc -eq 2 ] || log "$p: the build failed${back:+, the one before keeps running}"
   # (with MowBite's schedule held: the mower relies on it while it mows)
   if [ $rc -eq 0 ] && [ "$(gate "$p")" = mower ] && ! hold "$p"; then
     rc=4
@@ -1805,13 +2206,13 @@ build() {
   fi
   if [ $rc -ne 0 ]; then
     unhold
-    undo_back "$back" "$img"
+    [ -z "$back" ] || undo_back "$back" "$img"
     [ $rc -eq 2 ] && return 2
-    if [ $rc -eq 4 ]; then outcome "$p" error hold; else outcome "$p" error build; fi
+    if [ -n "$new" ]; then outcome "$p" error gone; elif [ $rc -eq 4 ]; then outcome "$p" error hold; else outcome "$p" error build; fi
     return 1
   fi
   built=$(id_of "$img")
-  if [ "$before" = "$ran" ] && same "$built" "$before"; then
+  if [ -z "$new" ] && [ "$before" = "$ran" ] && same "$built" "$before"; then
     # the same image again (built again it only has another record of its build): nothing to restart, compose would
     # leave it anyway. the tag stays on the one that runs, so that one stays there
     log "$p: the same image as before, it keeps running"
@@ -1820,13 +2221,21 @@ build() {
   elif [ -n "$stopped" ]; then
     # (nothing to see run, and the one before isn't kept for it)
     if ! compose $T_UP "$c" up --no-start --no-deps --no-build --pull never --force-recreate "$(service "$c")" >> "$LOG" 2>&1; then
-      log "$p: compose couldn't make it anew, the one before stays"
-      undo_back "$back" "$img"
-      outcome "$p" error compose
+      log "$p: compose couldn't make it anew${back:+, the one before stays}"
+      [ -z "$back" ] || undo_back "$back" "$img"
+      if [ -n "$new" ]; then outcome "$p" error gone; else outcome "$p" error compose; fi
       return 1
     fi
-    docker rmi "$back" > /dev/null 2>&1
+    [ -z "$back" ] || docker rmi "$back" > /dev/null 2>&1
     log "$p: made anew on its new build, stopped as it was"
+  elif [ -n "$new" ]; then
+    if ! restart "$p" "$built"; then
+      box_rm "$c"
+      log "$p: didn't run on its new build, removed again"
+      outcome "$p" error gone
+      return 1
+    fi
+    log "$p: running again"
   else
     # shellcheck disable=SC2086
     status "pending_$p" "$back" "$img" "$built" $fail
@@ -1834,6 +2243,7 @@ build() {
     status "pending_$p"
     log "$p: running again"
   fi
+  status "gone_$1"
   status "$1_image" "$(image_of "$c")"
   status "$1_built" "$commit"
   release_name "$p" "$name" "$how"
@@ -1850,6 +2260,13 @@ build() {
 check_build() {
   local c built want base st
   c=$(box "$1")
+  # (removed with OpenMower's version before: to be built)
+  if gone "$c"; then
+    status "$1_running" "?"
+    status "$1_source" github
+    status "$1_available" yes "$(gone_of "$c" | cut -d' ' -f7)"
+    return
+  fi
   built=$(built_of "$1")
   status "$1_running" "${built:-?}" "$(day_of "$(image_of "$c")")"
   status "$1_source" github
@@ -1877,6 +2294,11 @@ check_build() {
 update_build() {
   local want base
   progress "$1" prepare
+  # (removed with OpenMower's version before: built again, what github says or else what was noted then)
+  if gone "$(box "$1")"; then
+    build "$1" again "$(want_of "$1")"
+    return
+  fi
   running "$(box "$1")" || { log "$1: not running, left as it is"; outcome "$1" stopped; return 0; }
   want=$(want_of "$1") || { outcome "$1" error github; return 1; }
   # shellcheck disable=SC2086
@@ -2448,7 +2870,8 @@ check_all() {
 }
 
 # the parts asked for (all: every one), OpenMower first (builds start from it), the rest in their order. the ones that
-# wait for the dock only with the mower idle there, asked before each again. 2 when one had to wait for that
+# wait for the dock only with the mower idle there, asked before each again. 2 when one had to wait for that. why:
+# request, night, nokeep (OpenMower without a copy, asked for), again and start (its download tried again)
 run() {
   local why="$1" parts="" p waited was did=
   shift
@@ -2467,14 +2890,16 @@ run() {
     [ -n "$(for p in $(part_ids); do get "pending_$p"; done)" ] && did=1
     settle
   fi
+  WHY=$why
   MANUAL=
-  [ "$why" = request ] && MANUAL=1
+  NOKEEP=
+  case $why in request) MANUAL=1 ;; nokeep) MANUAL=1 NOKEEP=1 ;; esac
   waited=
   for p in $parts; do
     # (built on OpenMower's new version in this run already)
     case " $rebuilt " in *" $p "*) continue ;; esac
-    # (asked for: a part left as it was says why on its card)
-    if [ "$(gate "$p")" = mower ] && ! docked; then
+    # (asked for: a part left as it was says why on its card. OpenMower's update without a copy looks for itself)
+    if [ "$(gate "$p")" = mower ] && ! nokeep_open "$p" && ! docked; then
       waited=1
       [ -n "$MANUAL" ] && outcome "$p" error not_docked
       continue
@@ -2520,6 +2945,24 @@ alone() {
 back_part() {
   if [ "$1" = openmower ]; then back_openmower; else back_image "$1"; fi
   unhold
+}
+
+# OpenMower's update without a copy not done: on once at the updater's start, then when its next look is due
+nokeep_due() {
+  local next
+  nokeep_busy || return 1
+  [ -z "$nk_start" ] || return 0
+  if exists "$OM"; then next=${nk_next:-0}; else next=$(get openmower_missing | cut -d' ' -f2); fi
+  case $next in "" | *[!0-9]*) return 1 ;; esac
+  [ "$(now)" -ge "$next" ]
+}
+
+# the builds removed with OpenMower's version before and not built since, none of them failed: built when the mower is
+# idle in the dock, looked at every NOKEEP_EVERY
+gone_due() {
+  local p
+  ! nokeep_busy && [ "$(now)" -ge "${gone_next:-0}" ] || return 0
+  for p in $(noted); do gone "$(box "$p")" && [ "$(get "$p")" != "error gone" ] && printf '%s ' "$p"; done
 }
 
 # the parts set to update by themselves
@@ -2597,6 +3040,8 @@ check_all
 # (the night it ran last, also through a restart in its window: its own update came before it)
 done_day=$(get night_done)
 next=0
+# (OpenMower's update without a copy stopped halfway: on once at the start)
+nk_start=1
 while :; do
   serve
   alive
@@ -2619,6 +3064,7 @@ while :; do
     check=""
     self=""
     calib_req=""
+    nokeep=""
     while read -r w a b; do
       case $w in
       check) check=1 ;;
@@ -2630,10 +3076,12 @@ while :; do
         [ "$a" = all ] && self=1
         ;;
       self) self=1 ;;
+      # (OpenMower without a copy of the version that runs, checked by the interface: only one that's offered)
+      nokeep) [ "$(kind "$a")" = openmower ] && nokeep=1 ;;
       back)
         case $(kind "$a") in
         image | openmower)
-          if [ "$(gate "$a")" = none ] || docked; then
+          if [ "$(gate "$a")" = none ] || nokeep_open "$a" || docked; then
             alone "$a" back_part "$a"
             # (the leftovers as after a run: a build made anew on it keeps the one before until then)
             tidy
@@ -2671,10 +3119,11 @@ while :; do
       update_self manual
       status after_self
     fi
+    [ -z "$nokeep" ] || run nokeep openmower
     if [ -n "$parts" ]; then
       # shellcheck disable=SC2086
       run request $parts
-    elif [ -n "$check" ]; then
+    elif [ -n "$check" ] && [ -z "$nokeep" ]; then
       check_all
     fi
     status taken
@@ -2693,6 +3142,19 @@ while :; do
   # a request that came in while it was busy: at once, before the night's run or a look, its wake-up came while
   # nothing slept (one it can't take: next round, as before)
   [ -z "$stuck" ] && asked && continue
+  if nokeep_due; then
+    if [ -n "$nk_start" ]; then run start openmower; else run again openmower; fi
+    nk_start=
+    [ -z "$stuck" ] && asked && continue
+  fi
+  nk_start=
+  parts=$(gone_due)
+  if [ -n "$parts" ] && docked; then
+    gone_next=$(($(now) + NOKEEP_EVERY))
+    # shellcheck disable=SC2086
+    run again $parts
+    [ -z "$stuck" ] && asked && continue
+  fi
   # the night's run: once in its window (also past midnight, it counts as the night it started), again every 10 minutes
   # while the mower isn't in the dock
   parts=$(auto_parts)
