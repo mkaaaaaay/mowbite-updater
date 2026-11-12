@@ -71,8 +71,10 @@ compose() {
   envs=${l#*|}
   # (paths with spaces don't happen in dockge's stacks)
   files=$(printf '%s' "$files" | tr ',' '\n' | sed '/./!d; s/^/-f /')
-  envs=$(printf '%s' "$envs" | tr ',' '\n' | sed '/./!d' | while read -r f; do
-    case $f in /*) echo "--env-file $f" ;; *) echo "--env-file $dir/$f" ;; esac
+  envs=$(printf '%s\n' "$envs" | tr ',' '\n' | sed '/./!d' | while read -r f; do
+    case $f in /*) ;; *) f=$dir/$f ;; esac
+    # (one it can't see left out: compose reads the folder's .env then)
+    [ -f "$f" ] && echo "--env-file $f"
   done)
   # shellcheck disable=SC2086
   timeout "$t" docker compose -p "$project" --project-directory "$dir" $envs $files "$@"
