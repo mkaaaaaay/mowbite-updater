@@ -4,6 +4,8 @@
    (src/app/globals.css in github.com/mkaaaaaay/mowbite) */
 
 :root {
+  /* the empty part of a bar and the line between steps, on every design */
+  --track: rgba(128, 128, 128, 0.2);
   --background: #eef0f6;
   --foreground: #16181d;
   --card: rgba(255, 255, 255, 0.58);
@@ -460,6 +462,13 @@ button.control {
   color: var(--accent-foreground);
 }
 
+/* locked it reads like the other locked ones, not as a pale accent */
+.primary:disabled {
+  border-color: var(--card-border);
+  background: var(--card);
+  color: var(--foreground);
+}
+
 .danger {
   font-weight: 600;
   border-color: color-mix(in srgb, var(--error) 70%, transparent);
@@ -719,7 +728,6 @@ details[open] > summary::after {
 }
 
 .steps {
-  --track: rgba(128, 128, 128, 0.2);
   display: grid;
   margin: 4px 0 0;
   padding: 0;
@@ -842,7 +850,7 @@ details[open] > summary::after {
   position: relative;
   height: 6px;
   border-radius: 999px;
-  background: var(--well);
+  background: var(--track);
   overflow: hidden;
 }
 

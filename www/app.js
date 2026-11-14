@@ -130,7 +130,6 @@ const DE = {
   'Back on the version before': 'Zurück auf der vorigen Version',
   'Its data put back': 'Daten zurückgespielt',
   'Checking…': 'Prüfe…',
-  'Deleting…': 'Löscht…',
   'nothing new, it was up to date': 'nichts Neues, er war aktuell',
   "With this version the MowBite Planner doesn't work: it needs two changes that are only in edge so far (OM_PLANNER=external and keeping the planner's settings per area).":
     'Mit dieser Version funktioniert der MowBite-Planer nicht: Er braucht zwei Änderungen, die bisher nur in Edge sind (OM_PLANNER=external und das Behalten der Planer-Einstellungen pro Fläche).',
@@ -318,7 +317,6 @@ const DE = {
   'restarts itself with its updates': 'startet bei seinen Updates selbst neu',
   'Getting the log…': 'Holt das Log…',
   'Restarting…': 'Startet neu…',
-  'Looking…': 'Sieht nach…',
   'Looking at the containers…': 'Sieht nach den Containern…',
   'Look at the containers': 'Container ansehen',
   'Started again, {t}.': 'Neu gestartet, {t}.',
@@ -606,7 +604,7 @@ function when(t) {
   const time = d.toLocaleTimeString(LOCALE, {hour: '2-digit', minute: '2-digit'});
   if (ago === 0) return tr('today, {t}', {t: time});
   if (ago === 1) return tr('yesterday, {t}', {t: time});
-  return d.toLocaleString(LOCALE, {dateStyle: 'short', timeStyle: 'short'});
+  return d.toLocaleDateString(LOCALE) + ', ' + time;
 }
 const size = (b) => (b >= 1e9 ? fmt(b / 1e9, 1) + ' GB' : b >= 1e6 ? Math.round(b / 1e6) + ' MB' : Math.max(0, Math.round(b / 1e3)) + ' kB');
 const freeMb = () => (/^\d+$/.test(S('disk_free')) ? Number(S('disk_free')) : null);
@@ -1044,12 +1042,10 @@ function tick() {
 // a part's run in its card, as in MowBite: its steps, the done ones ticked, on the one it's on the bar
 function runCard(p, prog, ...more) {
   const steps = stepsOf(p.id, prog.step);
-  const text = runText();
   const at = steps.indexOf(prog.step);
   const back = steps.includes('back');
   return h('div', {class: 'card run', 'data-update': p.id},
     h('h3', null, tr(back ? '{name} goes back' : '{name} is being updated', {name: nameOf(p)})),
-    text && dim(text),
     h('ol', {class: 'steps'}, steps.map((step, i) =>
       h('li', {'data-step': step, class: i < at ? 'done' : i === at ? 'now' + (didntRun(prog) ? ' held' : '') : null},
         h('span', {class: 'stepDot'}, i < at ? tick() : i === at ? h('i') : String(i + 1)),
@@ -1490,7 +1486,7 @@ function roomFold() {
   // what's being deleted, where it was tapped: the image, the leftovers or all of them (asked elsewhere: not said which)
   const what = del !== null && askedFor.startsWith('free=') ? askedFor.slice('free='.length) : del !== null ? '' : null;
   const deleting = (w) => what === w && busyLine({part: '', step: 'free', pct: null, since: del});
-  const delButton = (w, key, label) => (what === w ? waitButton(key, tr('Deleting…'))
+  const delButton = (w, key, label) => (what === w ? waitButton(key, label)
     : twoTaps(key, label, tr('Really delete?'), () => ask('free=' + w)));
   const sub = [free !== null && tr('{gb} GB free', {gb: fmt(free / 1024, 1)}), total + cache > 0 && tr('{size} can be freed', {size: size(total + cache)})]
     .filter(Boolean)
@@ -1515,7 +1511,7 @@ function roomFold() {
     deleting(''),
     failedHere('room'),
     h('div', {class: 'row'},
-      h('button', {class: 'control', 'data-key': 'room', disabled: busy(), onclick: () => ask('room')}, tr(look !== null ? 'Looking…' : 'Look again')),
+      h('button', {class: 'control', 'data-key': 'room', disabled: busy(), onclick: () => ask('room')}, tr('Look again')),
       loose.length > 1 ? delButton('all', 'free-all', tr('Delete all but the ways back ({size})', {size: size(loose.reduce((n, i) => n + i.bytes, 0))})) : h('span')),
   );
 }
