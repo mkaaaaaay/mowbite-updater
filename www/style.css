@@ -687,37 +687,172 @@ details[open] > summary::after {
   overflow-wrap: anywhere;
 }
 
-/* what it does with a part right now */
+/* what runs and its channel, as in MowBite */
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 3px 12px;
+  font-size: 13px;
+}
+
+.facts > span:nth-child(odd) {
+  color: var(--text-secondary);
+}
+
+.facts select.control {
+  justify-self: start;
+  width: auto;
+  min-height: 32px;
+  padding-right: 28px;
+}
+
+/* a part's run, as in MowBite: its steps, the done ones ticked, the one it's on with its bar */
+.card.run {
+  border-top: 3px solid var(--accent);
+}
+
+.run h3 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.steps {
+  --track: rgba(128, 128, 128, 0.2);
+  display: grid;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steps li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 12px;
+  padding-bottom: 14px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.steps li:last-child {
+  padding-bottom: 0;
+}
+
+/* the line down to the next step */
+.steps li::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 26px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--track);
+}
+
+.steps li:last-child::before {
+  display: none;
+}
+
+.steps li > span:last-child {
+  display: grid;
+  gap: 4px;
+  padding-top: 2px;
+}
+
+.steps b,
+.busy b {
+  font-weight: 600;
+}
+
+.steps .dot {
+  /* (not the mower's state dot) */
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--track);
+  background: none;
+  font-size: 12px;
+  font-weight: 600;
+  transform: none;
+}
+
+.steps .dot svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.steps .done,
+.steps .now {
+  color: var(--foreground);
+}
+
+.steps .done .dot {
+  border-color: var(--success);
+  background: var(--success);
+  color: #fff;
+}
+
+.steps .done::before {
+  background: var(--success);
+}
+
+.steps .now .dot {
+  border-color: var(--accent);
+}
+
+.steps .now .dot i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* a new version that didn't run, on its way back */
+.steps .held .dot {
+  border-color: var(--warning);
+}
+
+.steps .held .dot i {
+  background: var(--warning);
+}
+
+/* something it does without steps: what, and its bar */
+.busy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+/* how far the step it's on is: the bar, under it how far and its time */
 .progress {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.progressHead {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
+.progress small {
   font-size: 13px;
-}
-
-.progressHead > .dim {
-  flex: none;
-  white-space: nowrap;
 }
 
 .track {
   position: relative;
-  height: 8px;
+  height: 6px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--foreground) 18%, transparent);
+  background: var(--well);
   overflow: hidden;
 }
 
 .fill {
   height: 100%;
   border-radius: 999px;
-  background: var(--success);
+  background: var(--accent);
   transition: width 0.6s ease;
 }
 
@@ -729,7 +864,7 @@ details[open] > summary::after {
   width: 35%;
   height: 100%;
   border-radius: 999px;
-  background: var(--success);
+  background: var(--accent);
   animation: moving 1.4s ease-in-out infinite;
 }
 

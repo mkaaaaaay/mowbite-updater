@@ -81,7 +81,6 @@ const DE = {
   'Skipped': 'Ausgelassen',
   "This version didn't start, it's left out until a newer one comes": 'Diese Version startete nicht, sie wird ausgelassen, bis eine neuere kommt',
   'With the OS': 'Mit dem OS',
-  'Installed: {what}': 'Installiert: {what}',
   '{v} from {d}': '{v} vom {d}',
   'from {d} ({c})': 'Stand vom {d} ({c})',
   'from {d}': 'Stand vom {d}',
@@ -98,8 +97,8 @@ const DE = {
   'Try again': 'Erneut versuchen',
   'Replace with the official version': 'Durch offizielle Version ersetzen',
   'Automatically at night ({when})': 'Automatisch nachts ({when})',
-  'Version and going back': 'Version und Rückweg',
-  'Version, going back, taking out': 'Version, Rückweg, Entfernen',
+  'The version before': 'Die vorige Version',
+  'The version before, taking out': 'Die vorige Version, Entfernen',
   'Taking out': 'Entfernen',
   'Data kept': 'Gesicherte Daten',
   "Before each update the updater keeps a copy of this part's data on the mower, the newest two. Putting one back stops it, keeps what it has now first and starts it again, only with the mower ready in the dock.":
@@ -117,7 +116,22 @@ const DE = {
   "its data couldn't be put back, see the log. The copies stay on the mower.": 'Daten ließen sich nicht zurückspielen, siehe Log. Die Sicherungen bleiben auf dem Mäher.',
   'this copy of its data is gone': 'diese Sicherung gibt es nicht mehr',
   'In line ({n} of {of})': 'Wartet ({n} von {of})',
-  'Comes with OpenMowerOS 3 itself: openmower update-os.': 'Kommt bei OpenMowerOS 3 mit dem System selbst: openmower update-os.',
+  'comes with OpenMowerOS itself (openmower update-os)': 'kommt mit OpenMowerOS selbst (openmower update-os)',
+  Runs: 'Läuft',
+  Channel: 'Kanal',
+  '{name} is being updated': '{name} wird aktualisiert',
+  '{name} goes back': '{name} geht zurück',
+  Ready: 'Vorbereitet',
+  Downloaded: 'Heruntergeladen',
+  Unpacked: 'Entpackt',
+  Built: 'Gebaut',
+  Restarted: 'Neu gestartet',
+  Waited: 'Gewartet',
+  'Back on the version before': 'Zurück auf der vorigen Version',
+  'Its data put back': 'Daten zurückgespielt',
+  'Checking…': 'Prüfe…',
+  'Deleting…': 'Löscht…',
+  'nothing new, it was up to date': 'nichts Neues, er war aktuell',
   "With this version the MowBite Planner doesn't work: it needs two changes that are only in edge so far (OM_PLANNER=external and keeping the planner's settings per area).":
     'Mit dieser Version funktioniert der MowBite-Planer nicht: Er braucht zwei Änderungen, die bisher nur in Edge sind (OM_PLANNER=external und das Behalten der Planer-Einstellungen pro Fläche).',
   "Edge changes often, an update at night can bring a new fault. Only when there's room for the old and the new version at once.":
@@ -158,7 +172,6 @@ const DE = {
   'Updating {name} ({n} of {of})…': 'Aktualisiert {name} ({n} von {of})…',
   '{n} of {of} layers': '{n} von {of} Ebenen',
   'step {n} of {of}': 'Schritt {n} von {of}',
-  'for {t}': 'seit {t}',
   // what happened last
   'Last time: {what}': 'Zuletzt: {what}',
   'Last time ({when}): {what}': 'Zuletzt ({when}): {what}',
@@ -219,7 +232,7 @@ const DE = {
   "{name} isn't on the mower right now: it was deleted with OpenMower's version before and building it again failed. Update builds it again.":
     '{name} ist gerade nicht auf dem Mäher: Es wurde mit der vorigen OpenMower-Version gelöscht, und der Neubau ist gescheitert. Aktualisieren baut es neu.',
   // OpenMower without a copy
-  "Installed: none, OpenMower isn't on the mower right now": 'Installiert: keine, OpenMower ist gerade nicht auf dem Mäher',
+  "none, OpenMower isn't on the mower right now": 'keine, OpenMower ist gerade nicht auf dem Mäher',
   "Both versions don't fit side by side. This way the version that runs is deleted first, then the new one downloaded ({size}). Until then the mower has no OpenMower and can't mow.":
     'Beide Versionen passen nicht nebeneinander. So wird die laufende Version zuerst gelöscht, dann die neue geladen ({size}). Solange hat der Mäher kein OpenMower und kann nicht mähen.',
   "There's no way back on the mower itself: if the new one doesn't start, the updater downloads the old one again (that takes as long as the update and needs the internet).":
@@ -305,6 +318,7 @@ const DE = {
   'restarts itself with its updates': 'startet bei seinen Updates selbst neu',
   'Getting the log…': 'Holt das Log…',
   'Restarting…': 'Startet neu…',
+  'Looking…': 'Sieht nach…',
   'Looking at the containers…': 'Sieht nach den Containern…',
   'Look at the containers': 'Container ansehen',
   'Started again, {t}.': 'Neu gestartet, {t}.',
@@ -502,6 +516,8 @@ function setConf(patch, where) {
     sendConf();
   });
 }
+// a setting from there on its way: its button waits for it
+const saving = (where) => [...confSent, ...confWaiting].some((c) => c.where === where);
 function confWhere(patch) {
   const k = Object.keys(patch)[0];
   if (k === 'at' || k === 'days') return 'schedule';
@@ -598,12 +614,12 @@ const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const nightDays = () => (st.conf.days === 'daily' ? [] : String(st.conf.days).split(',').map(Number).filter((d) => d >= 1 && d <= 7));
 const autoOn = (id) => st.conf[id + '_auto'] === 1;
 
-// what's installed: the version and its day, of a build its release or else its commit, of an app with channels the one
-// it follows, of the updater its release (its commit for a build of main)
-function installed(p) {
-  if (p.kind === 'os') return dim(tr('Comes with OpenMowerOS 3 itself: openmower update-os.'));
+// what runs: the version and its day, of a build its release or else its commit, of an app with channels the one it
+// follows (when there's no pick for it), of the updater its release (its commit for a build of main)
+function installed(p, picker) {
+  if (p.kind === 'os') return tr('comes with OpenMowerOS itself (openmower update-os)');
   const [what, day] = S(p.id + '_running').split(' ');
-  if (p.kind === 'openmower' && what === 'missing') return dim(tr("Installed: none, OpenMower isn't on the mower right now"));
+  if (p.kind === 'openmower' && what === 'missing') return tr("none, OpenMower isn't on the mower right now");
   const d = date(day);
   let v;
   if (p.id === 'updater' && S('updater_release')) {
@@ -611,17 +627,20 @@ function installed(p) {
   } else if (p.kind === 'build' && S(p.id + '_release')) {
     const rel = S(p.id + '_release');
     v = (d ? tr('{v} from {d}', {v: rel, d}) : rel) + (what && what !== '?' ? ' (' + what.slice(0, 7) + ')' : '');
-    if (S(p.id + '_stable') || st.conf[p.id] === 'stable') v += ' · ' + tr(st.conf[p.id] === 'stable' ? 'Stable' : 'Beta');
+    if (!picker && (S(p.id + '_stable') || st.conf[p.id] === 'stable')) v += ' · ' + tr(st.conf[p.id] === 'stable' ? 'Stable' : 'Beta');
   } else if (p.kind === 'build' || p.kind === 'local' || p.id === 'updater') {
     const c = what && what !== '?' ? what.slice(0, 7) : null;
     v = d && c ? tr('from {d} ({c})', {d, c}) : d ? tr('from {d}', {d}) : c ? tr('commit {c}', {c}) : tr('state unknown');
   } else {
     const name = p.kind === 'openmower' ? {edge: tr('Edge'), latest: tr('Release')}[what] || what : what;
     v = name && d ? tr('{v} from {d}', {v: name, d}) : name || d || tr('state unknown');
-    if (p.kind === 'image' && (S(p.id + '_stable') || st.conf[p.id] === 'stable')) v += ' · ' + tr(st.conf[p.id] === 'stable' ? 'Stable' : 'Beta');
+    if (!picker && p.kind === 'image' && (S(p.id + '_stable') || st.conf[p.id] === 'stable')) v += ' · ' + tr(st.conf[p.id] === 'stable' ? 'Stable' : 'Beta');
   }
-  return dim(tr('Installed: {what}', {what: v}));
+  return v;
 }
+// what runs and the channel to pick, as in MowBite
+const facts = (p, picker) => h('div', {class: 'facts'}, h('span', null, tr('Runs')), h('span', null, installed(p, picker)),
+  picker && [h('span', null, tr('Channel')), picker]);
 const BADGE = {
   yes: 'Update available',
   switch: 'Switch to the version picked',
@@ -680,6 +699,9 @@ function result(p) {
   switch (state) {
     case 'updated':
       return ok(rest[1] ? tr('updated to {v}', {v: rest[1]}) : tr('updated'));
+    // (asked to update itself: said once, its badge doesn't change)
+    case 'current':
+      return p.id === 'updater' ? ok(tr('nothing new, it was up to date')) : null;
     case 'back':
       return ok(rest[1] ? tr('back to the version before ({v})', {v: rest[1]}) : tr('back to the version before'));
     case 'data_back':
@@ -806,6 +828,24 @@ function stepLabel(p) {
     }[p.step],
   );
 }
+// a step once it's done
+const STEP_DONE = {
+  prepare: 'Ready', download: 'Downloaded', extract: 'Unpacked', build: 'Built', restart: 'Restarted', wait: 'Waited',
+  back: 'Back on the version before', data: 'Its data put back',
+};
+// the steps a part's run goes through, as in MowBite: one taken back or its data put back as asked, the updater itself,
+// a build, else a download. a new version that doesn't run goes back after its wait
+function stepsOf(id, step) {
+  const p = ALL().find((x) => x.id === id) || {kind: 'image'};
+  const steps = askedSince('back:' + id) !== null || (step === 'back' && !stepBefore[id]) ? ['back', 'restart', 'wait']
+    : askedSince('data:' + id) !== null || (step === 'data' && !stepBefore[id]) ? ['data', 'restart', 'wait']
+      : id === 'updater' ? ['prepare', 'download', 'restart']
+        : p.kind === 'build' || p.kind === 'local' ? ['prepare', 'build', 'restart', 'wait']
+          : ['prepare', 'download', 'extract', 'restart', 'wait'];
+  if (step === 'data' && !steps.includes('data') && !steps.includes('back')) steps.push('back');
+  if (!steps.includes(step)) steps.push(step);
+  return steps;
+}
 // how far, besides the time it's on it
 function stepDetail(p) {
   if (p.step === 'extract' && p.of) return tr('{n} of {of} layers', {n: p.done || 0, of: p.of});
@@ -816,7 +856,7 @@ function stepDetail(p) {
 // the time since it began, not the time it has left
 function sinceText(t) {
   const secs = Math.max(0, Math.round(now - t));
-  return tr('for {t}', {t: Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0')});
+  return Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
 }
 function runText() {
   if (!running()) return null;
@@ -979,16 +1019,38 @@ function fromTap(p) {
   const t = askedSince(p.part === 'updater' ? 'self' : 'now:' + p.part) || askedSince('now:all');
   return t && t < p.since ? {...p, since: t} : p;
 }
+// the bar of the step it's on, moving while there's no percent, and under it how far and its time
 function bar(p) {
   const label = stepLabel(p);
   const detail = stepDetail(p);
   return h('div', {class: 'progress' + (didntRun(p) ? ' warnbar' : '')},
-    h('div', {class: 'progressHead'}, h('span', null, label),
-      h('span', {class: 'dim'}, detail, detail && p.since ? ' · ' : null, p.since ? h('span', {'data-since': p.since}, sinceText(p.since)) : null)),
     h('div', {class: 'track', role: 'progressbar', 'aria-label': label, 'aria-valuetext': [label, detail].filter(Boolean).join(', '),
       'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': p.pct === null ? undefined : p.pct},
     p.pct === null ? h('div', {class: 'moving'}) : h('div', {class: 'fill', style: 'width:' + p.pct + '%'})),
+    (detail || p.since) && h('small', {class: 'dim'}, detail, detail && p.since ? ' · ' : null, p.since ? h('span', {'data-since': p.since}, sinceText(p.since)) : null),
   );
+}
+// something it does without steps (a look for updates or for room, deleting): what, and its bar
+const busyLine = (p, label) => h('div', {class: 'busy'}, h('b', null, label || stepLabel(p) + '…'), bar(p));
+// a done step's tick
+function tick() {
+  const e = h('span', {'aria-hidden': 'true'});
+  e.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>';
+  return e;
+}
+// a part's run in its card, as in MowBite: its steps, the done ones ticked, on the one it's on the bar
+function runCard(p, prog, ...more) {
+  const steps = stepsOf(p.id, prog.step);
+  const at = steps.indexOf(prog.step);
+  const back = steps.includes('back');
+  return h('div', {class: 'card run', 'data-update': p.id},
+    h('h3', null, tr(back ? '{name} goes back' : '{name} is being updated', {name: nameOf(p)})),
+    runText() && dim(runText()),
+    h('ol', {class: 'steps'}, steps.map((step, i) =>
+      h('li', {'data-step': step, class: i < at ? 'done' : i === at ? 'now' + (didntRun(prog) ? ' held' : '') : null},
+        h('span', {class: 'dot'}, i < at ? tick() : i === at ? h('i') : String(i + 1)),
+        h('span', null, h('b', null, i < at ? tr(STEP_DONE[step]) : stepLabel({...prog, step})), i === at && bar(prog))))),
+    more);
 }
 // where a part is in what runs: its step now, asked and not on it yet, or in line behind another
 function place(id) {
@@ -1002,13 +1064,15 @@ const onBar = (id) => {
   const {mine, wait} = place(id);
   return !!(mine || wait) || (id === 'updater' && !!restarting());
 };
-function bars(id) {
-  const {mine, queued, wait, parts} = place(id);
-  return [
-    mine && bar(fromTap(mine)),
-    wait && bar({part: id, step: wait.step, pct: null, since: wait.since}),
-    queued && dim(tr('In line ({n} of {of})', {n: parts.indexOf(id) + 1, of: parts.length})),
-  ];
+// its run right now: its step, or asked and not on it yet (from the tap on), null while it isn't
+function runOf(id) {
+  const {mine, wait} = place(id);
+  return mine ? fromTap(mine) : wait ? {part: id, step: wait.step, pct: null, since: wait.since} : null;
+}
+// in line behind another one of the run
+function inLine(id) {
+  const {queued, parts} = place(id);
+  return queued && dim(tr('In line ({n} of {of})', {n: parts.indexOf(id) + 1, of: parts.length}));
 }
 // the one button of a card, only when there's something to do: what's new, a version built here to swap, or not known.
 // none while its bar shows it's on it or it's in line for it
@@ -1089,6 +1153,8 @@ function missing() {
 
 function partCard(p) {
   const id = p.id;
+  const run = runOf(id);
+  if (run) return runCard(p, run, failedHere(id));
   const fixed = p.kind === 'local' || p.kind === 'os';
   const auto = autoOn(id);
   const stable = S(id + '_stable');
@@ -1125,8 +1191,8 @@ function partCard(p) {
     p.kind === 'openmower' && auto && st.conf.openmower === 'edge' &&
       dim(tr("Edge changes often, an update at night can bring a new fault. Only when there's room for the old and the new version at once.")),
   ].filter(Boolean);
-  const inside = [picker && h('div', {class: 'row'}, picker), notes, !backOut && back, out].flat().filter(Boolean);
-  const label = out ? (picker || (back && !backOut) ? 'Version, going back, taking out' : 'Taking out') : 'Version and going back';
+  const inside = [!backOut && back, out].filter(Boolean);
+  const label = out ? (back && !backOut ? 'The version before, taking out' : 'Taking out') : 'The version before';
   // its data kept before an update or before data was put back, newest first: back by hand
   const kept = (st.data || []).filter((k) => k.part === id).sort((a, b) => b.at - a.at).map((k) =>
     h('div', {class: 'row'},
@@ -1135,15 +1201,16 @@ function partCard(p) {
 
   return h('div', {class: 'card'},
     head(p),
-    installed(p),
-    bars(id),
+    facts(p, picker),
+    notes,
+    inLine(id),
     failedHere(id),
     resultLine(p),
     p.kind === 'openmower' && st.conf.openmower !== 'edge' && PARTS().some((x) => x.id === 'planner') &&
       h('p', {class: 'warn'}, tr("With this version the MowBite Planner doesn't work: it needs two changes that are only in edge so far (OM_PLANNER=external and keeping the planner's settings per area).")),
     p.kind === 'openmower' && ['yes', 'switch'].includes(avail(id)) && lineChange(),
     p.kind === 'openmower' && missing(),
-    p.kind === 'openmower' && state === 'nospace' && !onBar(id) && nokeepOffer(p),
+    p.kind === 'openmower' && state === 'nospace' && nokeepOffer(p),
     p.kind === 'image' && st.conf[id] === 'stable' && S(id + '_stable_older') && state !== 'stable_older' &&
       dim(tr('stable {v} is older than what runs, it stays until a newer stable is out', {v: S(id + '_stable_older')})),
     p.kind === 'image' && avail(id) === 'local' && dim(tr("This version was built on its own, it isn't the official one.")),
@@ -1170,7 +1237,8 @@ function setPicked(list, where) {
 }
 let choice = '';
 function addFold() {
-  const cand = S('candidates').split(' ').filter(Boolean);
+  // (one picked already is on its way into the list)
+  const cand = S('candidates').split(' ').filter((c) => c && !picked().includes(c));
   if (!cand.length) return null;
   if (!cand.includes(choice)) choice = '';
   return fold('add', false, false, tr('Add another app'), tr('Update other apps on the mower too'),
@@ -1178,12 +1246,16 @@ function addFold() {
     h('div', {class: 'row'},
       h('select', {class: 'control', 'data-key': 'pick', 'aria-label': tr('Pick an app'), value: choice, onchange: (e) => {
         choice = e.target.value;
-        e.target.closest('.row').querySelector('button').disabled = busy() || !choice;
+        e.target.closest('.row').querySelector('button').disabled = busy() || !choice || saving('add');
         pickedBy(e);
       }},
       h('option', {value: ''}, tr('Pick an app…')),
       cand.map((c) => h('option', {value: c}, c))),
-      h('button', {class: 'control', 'data-key': 'add', disabled: busy() || !choice, onclick: () => setPicked([...picked(), choice], 'add')}, tr('Add'))),
+      h('button', {class: 'control', 'data-key': 'add', disabled: busy() || !choice || saving('add'), onclick: () => {
+        const add = choice;
+        choice = '';
+        setPicked([...picked(), add], 'add');
+      }}, tr('Add'))),
     failedHere('add'));
 }
 
@@ -1192,16 +1264,14 @@ function selfCard() {
   if (!S('updater_running')) return null;
   const p = ALL().find((x) => x.id === 'updater');
   const since = restarting();
-  const prog = progressNow();
-  const mine = prog && prog.part === 'updater';
+  if (since) return runCard(p, {part: 'updater', step: 'restart', pct: null, since}, dim(tr('Restarting the updater, the page comes back by itself')));
+  const run = runOf('updater');
+  if (run) return runCard(p, run, failedHere('updater'));
   return h('div', {class: 'card'},
     head(p),
-    installed(p),
-    !since && bars('updater'),
-    since && bar({part: 'updater', step: 'restart', pct: null, since}),
-    since && dim(tr('Restarting the updater, the page comes back by itself')),
+    facts(p),
     // (with all the others: first, before them)
-    !since && !mine && askedFor === 'now' && (running() || askedSince('now:all') !== null) && avail('updater') === 'yes' &&
+    askedFor === 'now' && (running() || askedSince('now:all') !== null) && avail('updater') === 'yes' &&
       dim(tr('Comes first, the page then loads again by itself and the apps follow.')),
     failedHere('updater'),
     resultLine(p),
@@ -1375,8 +1445,8 @@ function overview() {
     h('div', {class: 'act'},
       news.length > 0 && tone !== 'run' &&
         h('button', {class: 'control primary', 'data-key': 'all', disabled: busy(), onclick: () => ask('now')}, tr('Update all ({n})', {n: news.length})),
-      h('button', {class: 'control' + (check ? ' primary' : ''), 'data-key': 'check', disabled: busy(), onclick: () => ask('check')},
-        tr('Check for updates'))),
+      h('button', {class: 'control' + (check ? ' primary' : ''), 'data-key': 'check', disabled: busy() || look !== null, onclick: () => ask('check')},
+        tr(look !== null ? 'Checking…' : 'Check for updates'))),
   );
 }
 
@@ -1417,6 +1487,11 @@ function roomFold() {
   const planner = builds.length === 1 && builds[0].id === 'planner';
   const look = askedSince('room');
   const del = askedSince('free');
+  // what's being deleted, where it was tapped: the image, the leftovers or all of them (asked elsewhere: not said which)
+  const what = del !== null && askedFor.startsWith('free=') ? askedFor.slice('free='.length) : del !== null ? '' : null;
+  const deleting = (w) => what === w && busyLine({part: '', step: 'free', pct: null, since: del});
+  const delButton = (w, key, label) => (what === w ? h('button', {class: 'control', 'data-key': key, disabled: true}, tr('Deleting…'))
+    : twoTaps(key, label, tr('Really delete?'), () => ask('free=' + w)));
   const sub = [free !== null && tr('{gb} GB free', {gb: fmt(free / 1024, 1)}), total + cache > 0 && tr('{size} can be freed', {size: size(total + cache)})]
     .filter(Boolean)
     .join(', ');
@@ -1427,20 +1502,21 @@ function roomFold() {
     items.map((i) => h('div', {class: 'item'},
       h('span', {class: 'itemName', title: i.refs === '-' ? null : i.refs.split(',').join(', ')}, roomName(i.refs)),
       dim(tr(ROOM_NOTE[i.kind] || ROOM_NOTE.unused)),
-      h('div', {class: 'row'}, dim(size(i.bytes)), twoTaps('img:' + i.id, tr('Delete'), tr('Really delete?'), () => ask('free=img:' + i.id))))),
+      h('div', {class: 'row'}, dim(size(i.bytes)), delButton('img:' + i.id, 'img:' + i.id, tr('Delete'))),
+      deleting('img:' + i.id))),
     cache > 0 && h('div', {class: 'item'},
       h('span', {class: 'itemName'}, tr(planner ? 'Leftovers from building (the planner)' : 'Leftovers from building')),
       dim(tr(planner ? "The planner's next build then takes longer and needs the internet." : 'The next build then takes longer and needs the internet.')),
-      h('div', {class: 'row'}, dim(size(cache)), twoTaps('cache', tr('Clear'), tr('Really delete?'), () => ask('free=cache')))),
+      h('div', {class: 'row'}, dim(size(cache)), delButton('cache', 'cache', tr('Clear'))),
+      deleting('cache')),
     !items.length && !cache && dim(tr('Nothing to delete right now.')),
-    look !== null && bar({part: '', step: 'room', pct: null, since: look}),
-    del !== null && bar({part: '', step: 'free', pct: null, since: del}),
+    look !== null && busyLine({part: '', step: 'room', pct: null, since: look}),
+    deleting('all'),
+    deleting(''),
     failedHere('room'),
     h('div', {class: 'row'},
-      h('button', {class: 'control', 'data-key': 'room', disabled: busy(), onclick: () => ask('room')}, tr('Look again')),
-      loose.length > 1
-        ? twoTaps('free-all', tr('Delete all but the ways back ({size})', {size: size(loose.reduce((n, i) => n + i.bytes, 0))}), tr('Really delete?'), () => ask('free=all'))
-        : h('span')),
+      h('button', {class: 'control', 'data-key': 'room', disabled: busy(), onclick: () => ask('room')}, tr(look !== null ? 'Looking…' : 'Look again')),
+      loose.length > 1 ? delButton('all', 'free-all', tr('Delete all but the ways back ({size})', {size: size(loose.reduce((n, i) => n + i.bytes, 0))})) : h('span')),
   );
 }
 
@@ -1455,6 +1531,8 @@ async function lastLog() {
 // taken once another one than before is there (by the mower's clock in its head, this one's may differ), given up after
 // a minute
 async function getLog(name) {
+  // (asked already, a second tap waits for that one)
+  if (shownLog && shownLog.name === name && shownLog.text === null) return;
   shownLog = {name, text: null};
   clearInterval(logWait);
   render();
@@ -1514,19 +1592,19 @@ function containerFold() {
         restartLine(c.name),
         h('div', {class: 'row'},
           // (its own log is the one further down)
-          !c.self && h('button', {class: 'control', 'data-key': 'log:' + c.name, disabled: busy(), onclick: () => {
+          !c.self && h('button', {class: 'control', 'data-key': 'log:' + c.name, disabled: busy() || logging, onclick: () => {
             if (open && shownLog.text !== null) {
               shownLog = null;
               render();
             } else getLog(c.name);
-          }}, open && shownLog.text !== null ? tr('Hide the log') : tr('Show the log')),
+          }}, logging ? tr('Getting the log…') : open && shownLog.text !== null ? tr('Hide the log') : tr('Show the log')),
           c.self
             ? dim(tr('restarts itself with its updates'))
-            : c.state === 'running'
-              ? twoTaps('restart:' + c.name, tr('Restart'), tr('Really restart?'), () => ask('restart=' + c.name))
-              : h('span')),
-        restarting && dim(tr('Restarting…')),
-        logging && dim(tr('Getting the log…')),
+            : restarting
+              ? h('button', {class: 'control', 'data-key': 'restart:' + c.name, disabled: true}, tr('Restarting…'))
+              : c.state === 'running'
+                ? twoTaps('restart:' + c.name, tr('Restart'), tr('Really restart?'), () => ask('restart=' + c.name))
+                : h('span')),
         open && shownLog.text !== null && h('div', {class: 'act'}, copyButton('copy:' + c.name, shownLog.text)),
         open && shownLog.text !== null && h('pre', {class: 'log boxlog'}, shownLog.text || '–'),
         open && shownLog.text !== null && dim(tr('Newest at the bottom')));
