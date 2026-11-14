@@ -621,20 +621,21 @@ function installed(p, picker) {
   const [what, day] = S(p.id + '_running').split(' ');
   if (p.kind === 'openmower' && what === 'missing') return tr("none, OpenMower isn't on the mower right now");
   const d = date(day);
+  const chan = !picker && (S(p.id + '_stable') || st.conf[p.id] === 'stable') ? ' · ' + tr(st.conf[p.id] === 'stable' ? 'Stable' : 'Beta') : '';
   let v;
   if (p.id === 'updater' && S('updater_release')) {
     v = d ? tr('{v} from {d}', {v: S('updater_release'), d}) : S('updater_release');
   } else if (p.kind === 'build' && S(p.id + '_release')) {
     const rel = S(p.id + '_release');
     v = (d ? tr('{v} from {d}', {v: rel, d}) : rel) + (what && what !== '?' ? ' (' + what.slice(0, 7) + ')' : '');
-    if (!picker && (S(p.id + '_stable') || st.conf[p.id] === 'stable')) v += ' · ' + tr(st.conf[p.id] === 'stable' ? 'Stable' : 'Beta');
+    v += chan;
   } else if (p.kind === 'build' || p.kind === 'local' || p.id === 'updater') {
     const c = what && what !== '?' ? what.slice(0, 7) : null;
     v = d && c ? tr('from {d} ({c})', {d, c}) : d ? tr('from {d}', {d}) : c ? tr('commit {c}', {c}) : tr('state unknown');
   } else {
     const name = p.kind === 'openmower' ? {edge: tr('Edge'), latest: tr('Release')}[what] || what : what;
     v = name && d ? tr('{v} from {d}', {v: name, d}) : name || d || tr('state unknown');
-    if (!picker && p.kind === 'image' && (S(p.id + '_stable') || st.conf[p.id] === 'stable')) v += ' · ' + tr(st.conf[p.id] === 'stable' ? 'Stable' : 'Beta');
+    if (p.kind === 'image') v += chan;
   }
   return v;
 }
@@ -1030,8 +1031,10 @@ function bar(p) {
     (detail || p.since) && h('small', {class: 'dim'}, detail, detail && p.since ? ' · ' : null, p.since ? h('span', {'data-since': p.since}, sinceText(p.since)) : null),
   );
 }
+// a button while what it asked for is on its way
+const waitButton = (key, label) => h('button', {class: 'control', 'data-key': key, disabled: true}, label);
 // something it does without steps (a look for updates or for room, deleting): what, and its bar
-const busyLine = (p, label) => h('div', {class: 'busy'}, h('b', null, label || stepLabel(p) + '…'), bar(p));
+const busyLine = (p) => h('div', {class: 'busy'}, h('b', null, stepLabel(p) + '…'), bar(p));
 // a done step's tick
 function tick() {
   const e = h('span', {'aria-hidden': 'true'});
@@ -1041,14 +1044,15 @@ function tick() {
 // a part's run in its card, as in MowBite: its steps, the done ones ticked, on the one it's on the bar
 function runCard(p, prog, ...more) {
   const steps = stepsOf(p.id, prog.step);
+  const text = runText();
   const at = steps.indexOf(prog.step);
   const back = steps.includes('back');
   return h('div', {class: 'card run', 'data-update': p.id},
     h('h3', null, tr(back ? '{name} goes back' : '{name} is being updated', {name: nameOf(p)})),
-    runText() && dim(runText()),
+    text && dim(text),
     h('ol', {class: 'steps'}, steps.map((step, i) =>
       h('li', {'data-step': step, class: i < at ? 'done' : i === at ? 'now' + (didntRun(prog) ? ' held' : '') : null},
-        h('span', {class: 'dot'}, i < at ? tick() : i === at ? h('i') : String(i + 1)),
+        h('span', {class: 'stepDot'}, i < at ? tick() : i === at ? h('i') : String(i + 1)),
         h('span', null, h('b', null, i < at ? tr(STEP_DONE[step]) : stepLabel({...prog, step})), i === at && bar(prog))))),
     more);
 }
@@ -1060,10 +1064,6 @@ function place(id) {
   const queued = !mine && parts.includes(id) && parts.indexOf(id) > (prog ? parts.indexOf(prog.part) : 0);
   return {mine, queued, wait: !mine && !queued && waiting(id), parts};
 }
-const onBar = (id) => {
-  const {mine, wait} = place(id);
-  return !!(mine || wait) || (id === 'updater' && !!restarting());
-};
 // its run right now: its step, or asked and not on it yet (from the tap on), null while it isn't
 function runOf(id) {
   const {mine, wait} = place(id);
@@ -1075,9 +1075,9 @@ function inLine(id) {
   return queued && dim(tr('In line ({n} of {of})', {n: parts.indexOf(id) + 1, of: parts.length}));
 }
 // the one button of a card, only when there's something to do: what's new, a version built here to swap, or not known.
-// none while its bar shows it's on it or it's in line for it
+// none while it's in line for it (on it, its card shows the run)
 function actButton(p) {
-  if (p.kind === 'local' || p.kind === 'os' || onBar(p.id) || place(p.id).queued) return null;
+  if (p.kind === 'local' || p.kind === 'os' || place(p.id).queued) return null;
   // (it can't update itself from outside its compose file)
   if (p.id === 'updater' && (S('updater_away') || S('updater_available') === 'unknown none')) return null;
   const a = avail(p.id);
@@ -1490,7 +1490,7 @@ function roomFold() {
   // what's being deleted, where it was tapped: the image, the leftovers or all of them (asked elsewhere: not said which)
   const what = del !== null && askedFor.startsWith('free=') ? askedFor.slice('free='.length) : del !== null ? '' : null;
   const deleting = (w) => what === w && busyLine({part: '', step: 'free', pct: null, since: del});
-  const delButton = (w, key, label) => (what === w ? h('button', {class: 'control', 'data-key': key, disabled: true}, tr('Deleting…'))
+  const delButton = (w, key, label) => (what === w ? waitButton(key, tr('Deleting…'))
     : twoTaps(key, label, tr('Really delete?'), () => ask('free=' + w)));
   const sub = [free !== null && tr('{gb} GB free', {gb: fmt(free / 1024, 1)}), total + cache > 0 && tr('{size} can be freed', {size: size(total + cache)})]
     .filter(Boolean)
@@ -1601,7 +1601,7 @@ function containerFold() {
           c.self
             ? dim(tr('restarts itself with its updates'))
             : restarting
-              ? h('button', {class: 'control', 'data-key': 'restart:' + c.name, disabled: true}, tr('Restarting…'))
+              ? waitButton('restart:' + c.name, tr('Restarting…'))
               : c.state === 'running'
                 ? twoTaps('restart:' + c.name, tr('Restart'), tr('Really restart?'), () => ask('restart=' + c.name))
                 : h('span')),

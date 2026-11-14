@@ -767,21 +767,18 @@ details[open] > summary::after {
   font-weight: 600;
 }
 
-.steps .dot {
-  /* (not the mower's state dot) */
+.stepDot {
   display: grid;
   place-items: center;
   width: 24px;
   height: 24px;
   border-radius: 50%;
   border: 2px solid var(--track);
-  background: none;
   font-size: 12px;
   font-weight: 600;
-  transform: none;
 }
 
-.steps .dot svg {
+.stepDot svg {
   display: block;
   width: 14px;
   height: 14px;
@@ -792,7 +789,7 @@ details[open] > summary::after {
   color: var(--foreground);
 }
 
-.steps .done .dot {
+.steps .done .stepDot {
   border-color: var(--success);
   background: var(--success);
   color: #fff;
@@ -802,11 +799,11 @@ details[open] > summary::after {
   background: var(--success);
 }
 
-.steps .now .dot {
+.steps .now .stepDot {
   border-color: var(--accent);
 }
 
-.steps .now .dot i {
+.steps .now .stepDot i {
   width: 10px;
   height: 10px;
   border-radius: 50%;
@@ -814,11 +811,11 @@ details[open] > summary::after {
 }
 
 /* a new version that didn't run, on its way back */
-.steps .held .dot {
+.steps .held .stepDot {
   border-color: var(--warning);
 }
 
-.steps .held .dot i {
+.steps .held .stepDot i {
   background: var(--warning);
 }
 
