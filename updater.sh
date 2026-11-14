@@ -239,6 +239,13 @@ ref_of() {
   if r=$(docker inspect -f '{{.Config.Image}}' "$1" 2>/dev/null); then echo "$r"; else gone_of "$1" | cut -d' ' -f2; fi
 }
 id_of() { docker image inspect -f '{{.Id}}' "$1" 2>/dev/null; }
+# an image's bytes on disk as docker lists them, 0 when it isn't there. (inspect's Size is only the packed layers with
+# containerd's image store, as on OpenMowerOS)
+image_bytes() {
+  local i
+  i=$(id_of "$1") || { echo 0; return; }
+  docker image ls --no-trunc --format '{{.ID}} {{.Size}}' 2>/dev/null | awk -v i="$i" "$bytes_awk"'$1 == i {print bytes($2); f = 1; exit} END {if (!f) print 0}'
+}
 # (a container waiting for its next restart counts as running for docker, not here)
 running() { [ "$(docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null)" = running ]; }
 day_of() { docker image inspect -f '{{.Created}}' "$1" 2>/dev/null | cut -c1-10; }
@@ -1140,7 +1147,7 @@ update_image() {
   # (the layers looked up once: for the room and the bar)
   layers "$target" > "$STATE/layers"
   need=$(need_mb "$target" "$before" "$STATE/layers")
-  [ -n "$need" ] || need=$(($(docker image inspect -f '{{.Size}}' "$before" 2>/dev/null || echo 0) / 1048576))
+  [ -n "$need" ] || need=$(($(image_bytes "$before") / 1048576))
   room_for $((need + ROOM_APP)) || { log "$p: not enough room (needs $need MB and $ROOM_APP to spare, $(free_mb) MB free), nothing changed"; outcome "$p" nospace "$need" "$(free_mb)"; return 1; }
   # kept before anything moves its tag (an image only built here is gone once its tag is on another one)
   back=$(keep_back "$repo" "$before" "$p")
@@ -1603,7 +1610,7 @@ back_openmower() {
 # form: status openmower_nokeep yes <MB downloaded> <parts built again, commas, or -> <tags back afterwards, commas, or -> <tags gone for good, commas, or ->
 # form: status openmower_nokeep no prev|env|registry|holders|room <MB needed> <MB there>|box <container>|base <part>|github <part>
 nokeep_look() {
-  local target="$1" before="$2" ref="$3" repo="$4" new only has s need c p w back='' all
+  local target="$1" before="$2" ref="$3" repo="$4" new only has need c p w back='' all
   nk_holders=
   nk_parts=
   nk_wants=
@@ -1618,8 +1625,7 @@ nokeep_look() {
   # (what's free, the build cache and the image that runs against the new one's layers x5 and 1 GB more)
   has=$(free_mb)
   has=$((${has:-0} + $(sed -n 's/^cache //p' "$STATE/room" 2>/dev/null | grep -x '[0-9][0-9]*' || echo 0) / 1048576))
-  s=$(docker image inspect -f '{{.Size}}' "$before" 2>/dev/null | grep -x '[0-9][0-9]*') || s=0
-  [ -z "$only" ] || has=$((has + s / 1048576))
+  [ -z "$only" ] || has=$((has + $(image_bytes "$before") / 1048576))
   need=$(awk '{s += $2} END {printf "%d\n", s * 5 / 1048576 + 1024}' "$STATE/layers")
   if [ -z "$only" ] || [ "$has" -lt "$need" ]; then status openmower_nokeep no room "$need" "$has"; return 1; fi
   nk_holders=$(docker images -aq --no-trunc 2>/dev/null | sort -u | xargs -r docker image inspect -f '{{.Id}} {{range .RootFS.Layers}}{{.}} {{end}}' 2>/dev/null |
@@ -2656,7 +2662,7 @@ tidy() {
     exists "$name" || continue
     case $(kind "$p") in
     # (a big app, like xtech's with its 300 MB, keeps none: the mower's disk is small)
-    image) if [ "$(docker image inspect -f '{{.Size}}' "$(image_of "$name")" 2>/dev/null || echo 0)" -lt 104857600 ]; then keep=$KEEP; else keep=$KEEP_BIG; fi ;;
+    image) if [ "$(image_bytes "$(image_of "$name")")" -lt 104857600 ]; then keep=$KEEP; else keep=$KEEP_BIG; fi ;;
     openmower | build) keep=$KEEP_BIG ;;
     *) continue ;;
     esac
@@ -2758,7 +2764,7 @@ update_self() {
   # (the layers looked up once: for the room and the bar)
   layers "$me" > "$STATE/layers"
   need=$(need_mb "$me" "$(image_of "$ME")" "$STATE/layers")
-  [ -n "$need" ] || need=$(($(docker image inspect -f '{{.Size}}' "$(image_of "$ME")" 2>/dev/null || echo 0) / 1048576))
+  [ -n "$need" ] || need=$(($(image_bytes "$(image_of "$ME")") / 1048576))
   if ! room_for $((need + ROOM_APP)); then
     log "the updater: not enough room (needs $need MB and $ROOM_APP to spare, $(free_mb) MB free), it stays as it is"
     outcome updater nospace "$need" "$(free_mb)"

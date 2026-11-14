@@ -88,6 +88,8 @@ image)
       ;;
     esac
     ;;
+  # (ls: their sizes as docker lists them, from sizes "<id> <size>", else 1kB)
+  --no-trunc) for i in $(cut -d' ' -f1 $F/layers); do echo "$i $(awk -v i="$i" '$1 == i {print $2}' $F/sizes 2> /dev/null | grep . || echo 1kB)"; done ;;
   *) [ -n "$(id_of "$1")" ]; exit ;;
   esac
   ;;
@@ -534,7 +536,7 @@ r/om:mine sha256:loc -
 r/mowbite:latest sha256:mb r/mowbite@sha256:dmb'
 nk_fresh() {
   fresh
-  rm -rf /fake/c/pl /fake/c/x /fake/builds /fake/pull_fail /fake/build_fail /fake/nostart* /fake/reg_gone /fake/reg_down /fake/gh_down /fake/no_ids /fake/rm_fail_* /fake/page /fake/no_list
+  rm -rf /fake/sizes /fake/c/pl /fake/c/x /fake/builds /fake/pull_fail /fake/build_fail /fake/nostart* /fake/reg_gone /fake/reg_down /fake/gh_down /fake/no_ids /fake/rm_fail_* /fake/page /fake/no_list
   printf '%s\n' "$NK_REFS" > /fake/refs
   printf 'sha256:om l1 l2 l3\nsha256:pl l1 l2 l3 p1\nsha256:pl0 l1 l2 p0\nsha256:loc l1 l9\nsha256:mb m1\n' > /fake/layers
   box_at pl sha256:pl r/pl:edge
@@ -647,6 +649,10 @@ echo 0 > /fake/cache
 check_room
 update_openmower
 [ "$(get openmower_nokeep)" = "no room 2029 1500" ] || bad "nokeep: no room either way, but: $(get openmower_nokeep)"
+# (the image that runs counted as docker lists it, not as inspect's packed Size of containerd's store)
+echo 'sha256:om 600MB' > /fake/sizes
+update_openmower
+[ "$(get openmower_nokeep | cut -d' ' -f1)" = yes ] || bad "nokeep: room with the image that runs gone, but: $(get openmower_nokeep)"
 nk_fresh
 box_at x sha256:pl0 r/pl:before-1
 update_openmower
