@@ -5,7 +5,8 @@
 # put back (checked first, kept first, nothing when it can't), what the format of the data says, going back with it,
 # by hand from its page, a stop halfway, what a pull by its digest leaves, the rest of a request after its own update,
 # its own update seen running and answering for 45 s or put back, and OpenMower updated without a copy (offered or not,
-# done, a download that fails and its tries, a version that doesn't run, a stop halfway, a build that fails). in the
+# done, a download that fails and its tries, a version that doesn't run, a stop halfway, a build that fails, all of it
+# with OpenMower and the planner waiting for each other as with OM_PLANNER=external). in the
 # image it's built on, nothing written here. what failed a line, 1 then. test/logic.sh data (or self, nokeep): only those
 # (cases change the updater's functions in subshells of their own)
 # shellcheck disable=SC2031,SC2329
@@ -536,7 +537,7 @@ r/om:mine sha256:loc -
 r/mowbite:latest sha256:mb r/mowbite@sha256:dmb'
 nk_fresh() {
   fresh
-  rm -rf /fake/sizes /fake/c/pl /fake/c/x /fake/builds /fake/pull_fail /fake/build_fail /fake/nostart* /fake/reg_gone /fake/reg_down /fake/gh_down /fake/no_ids /fake/rm_fail_* /fake/page /fake/no_list
+  rm -rf /fake/sizes /fake/c/pl /fake/c/x /fake/builds /fake/pull_fail /fake/build_fail /fake/nostart* /fake/reg_gone /fake/reg_down /fake/gh_down /fake/no_ids /fake/rm_fail_* /fake/page /fake/no_list /fake/external
   printf '%s\n' "$NK_REFS" > /fake/refs
   printf 'sha256:om l1 l2 l3\nsha256:pl l1 l2 l3 p1\nsha256:pl0 l1 l2 p0\nsha256:loc l1 l9\nsha256:mb m1\n' > /fake/layers
   box_at pl sha256:pl r/pl:edge
@@ -553,6 +554,7 @@ nk_fresh() {
   nk_next=
   nk_start=
   gone_next=
+  rebuilt=
 }
 free_mb() { cat /fake/free; }
 check_room() { echo "cache $(cat /fake/cache)" > "$STATE/room"; }
@@ -605,12 +607,15 @@ restart() {
   echo "restart $1 $2" >> /fake/calls
   compose 1 "$(box "$1")" up -d "$(service "$(box "$1")")" && seen "$1" "$2"
 }
-# (a new version that doesn't run: its id in nostart, or nostart_<part>)
+# (a new version that doesn't run: its id in nostart, or nostart_<part>. external: as with OM_PLANNER=external, OpenMower
+# answers only while the planner runs, the planner only while OpenMower runs)
 seen() {
   fw_failed=
   echo "seen $1 $2" >> /fake/calls
-  [ "$(image_of "$(box "$1")")" = "$2" ] && ! grep -qx "$2" /fake/nostart 2> /dev/null && [ ! -e "/fake/nostart_$1" ]
+  [ "$(image_of "$(box "$1")")" = "$2" ] && ! grep -qx "$2" /fake/nostart 2> /dev/null && [ ! -e "/fake/nostart_$1" ] || return 1
+  [ ! -e /fake/external ] || if [ "$1" = openmower ]; then running pl; else running om; fi
 }
+mower() { if [ -e /fake/external ] && [ -d /fake/c/om ] && ! running pl; then echo "0 unknown"; else cat /fake/mower; fi; }
 id() { cat "/fake/c/$1/image" 2> /dev/null; }
 nokeep() { NOKEEP=1 WHY=nokeep update_openmower; }
 first() { grep -n -- "$1" /fake/calls | head -n1 | cut -d: -f1; }
@@ -939,17 +944,27 @@ run again openmower
 [ "$(get openmower)" = rolled_back ] && [ "$(id om)" = sha256:om ] && [ -z "$(get nokeep_openmower)" ] && [ "$(get planner_base_id)" = sha256:om ] ||
   bad "nokeep: not back after a stop halfway: $(get openmower), runs $(id om)"
 
-# the mower out of the dock once OpenMower runs: the planner waits for it, then it's built
+# the mower out of the dock once OpenMower runs: the planner built before it starts is seen all the same, a stopped one
+# waits for the dock, then it's made
 nk_fresh
 (
   restart() { echo "0 IDLE" > /fake/mower; compose 1 "$(box "$1")" up -d svc && seen "$1" "$2"; }
   nokeep
 )
+[ "$(get openmower | cut -d' ' -f1)" = updated ] && [ "$(get planner | cut -d' ' -f1)" = updated ] && [ "$(cat /fake/c/pl/status)" = running ] ||
+  bad "nokeep: the planner with the mower out: $(get planner)"
+nk_fresh
+echo exited > /fake/c/pl/status
+(
+  restart() { echo "0 IDLE" > /fake/mower; compose 1 "$(box "$1")" up -d svc && seen "$1" "$2"; }
+  nokeep
+)
 [ "$(get openmower | cut -d' ' -f1)" = updated ] && [ "$(get planner)" = "error gone_dock" ] && [ ! -e /fake/c/pl ] && [ "$(gone_due)" = "planner " ] ||
-  bad "nokeep: the planner waiting for the dock: $(get planner), due $(gone_due)"
+  bad "nokeep: the stopped planner waiting for the dock: $(get planner), due $(gone_due)"
 echo 1 > /fake/mower
 run again planner
-[ "$(get planner | cut -d' ' -f1)" = updated ] && [ -e /fake/c/pl ] && [ -z "$(get gone_planner)$(gone_due)" ] || bad "nokeep: the planner not built in the dock: $(get planner)"
+[ "$(get planner)" = stopped ] && [ "$(cat /fake/c/pl/status)" = created ] && [ -z "$(get gone_planner)$(gone_due)" ] ||
+  bad "nokeep: the stopped planner not made in the dock: $(get planner)"
 
 # a build that fails stays missing, its button builds it
 nk_fresh
@@ -964,6 +979,71 @@ update_build planner
 rm /fake/nostart_planner
 update_build planner
 [ "$(get planner | cut -d' ' -f1)" = updated ] && [ "$(cat /fake/c/pl/status)" = running ] && [ -z "$(get gone_planner)" ] || bad "nokeep: its button didn't build it: $(get planner)"
+
+# --- OM_PLANNER=external: OpenMower and the planner wait for each other ---
+# both built, started and seen, the planner built and started before OpenMower and seen after it
+nk_fresh
+: > /fake/external
+nokeep
+[ "$(get openmower | cut -d' ' -f1,3)" = "updated edge" ] && [ "$(id om)" = sha256:new ] && [ "$(get planner | cut -d' ' -f1,3)" = "updated v1.0.0" ] &&
+  [ "$(id pl)" = sha256:b1 ] && [ "$(get planner_base_id)" = sha256:new ] && [ "$(mower)" = 1 ] ||
+  bad "external: not updated: $(get openmower), $(get planner), runs $(id om) $(id pl)"
+! grep -q '^gone_\|^nokeep_\|^openmower_missing\|^openmower_fw_check' /st/status && ! grep -q 'sha256:pl \|sha256:pl0\|sha256:om ' /fake/layers ||
+  bad "external: notes or the old layers left: $(grep '^gone_\|^nokeep_' /st/status), $(cut -d' ' -f1 /fake/layers | tr '\n' ' ')"
+[ "$(first 'compose pl .* build svc')" -lt "$(first 'compose pl up -d')" ] && [ "$(first 'compose pl up -d')" -lt "$(first '^restart openmower')" ] &&
+  [ "$(first '^seen openmower')" -lt "$(first '^seen planner')" ] && [ "$(grep -c 'compose pl .* build svc' /fake/calls)" = 1 ] ||
+  bad "external: not in its order: $(grep '^compose\|^restart\|^seen' /fake/calls | tr '\n' '|')"
+# the new version doesn't run: the planner built on it goes with it, built again on the one before
+nk_fresh
+: > /fake/external
+echo sha256:new > /fake/nostart
+nokeep
+[ "$(get openmower)" = rolled_back ] && [ "$(id om)" = sha256:om ] && [ "$(get planner | cut -d' ' -f1)" = updated ] && [ "$(id pl)" = sha256:b2 ] &&
+  [ "$(get planner_base_id)" = sha256:om ] && [ -z "$(get nokeep_openmower)$(get gone_planner)" ] ||
+  bad "external: not back: $(get openmower), $(get planner), runs $(id om) $(id pl)"
+! grep -q '^sha256:b1 \|^sha256:new ' /fake/layers && [ "$(get openmower_failed)" = "sha256:new sha256:dnew" ] ||
+  bad "external: the new version or the planner built on it left: $(cut -d' ' -f1 /fake/layers | tr '\n' ' ')"
+# the planner can't be built: OpenMower not seen without it, no way back, looked at again with the planner built then
+nk_fresh
+: > /fake/external
+: > /fake/build_fail
+nokeep
+[ "$(get openmower)" = unconfirmed ] && [ "$(id om)" = sha256:new ] && [ "$(get planner)" = "error gone" ] && [ ! -e /fake/c/pl ] &&
+  [ "$(get nokeep_openmower | cut -d' ' -f1)" = new ] && [ -z "$(get openmower_failed)" ] && ! called '^pull r/om@' && [ -n "$nk_next" ] ||
+  bad "external: a planner that can't be built: $(get openmower), $(get planner), $(get nokeep_openmower)"
+[ "$(mower)" = "0 unknown" ] && still && [ "$(gate planner)" = still ] || bad "external: not still without the planner: $(mower)"
+rm /fake/build_fail
+echo "$nk_next" > /fake/now
+nokeep_due || bad "external: its next look not due"
+run again openmower
+[ "$(get openmower | cut -d' ' -f1)" = updated ] && [ "$(id om)" = sha256:new ] && [ "$(get planner | cut -d' ' -f1)" = updated ] && [ "$(id pl)" = sha256:b1 ] &&
+  ! grep -q '^gone_\|^nokeep_' /st/status || bad "external: not done on its next look: $(get openmower), $(get planner)"
+# stuck as before: OpenMower runs on the version before, the planner gone and nothing answers. built then, not while the
+# mower mows or is idle out of the dock
+nk_fresh
+: > /fake/external
+gone_note planner "$C1 v1.0.0 release"
+rm -rf /fake/c/pl
+outcome planner error not_docked
+[ "$(mower)" = "0 unknown" ] && [ "$(gone_due)" = "planner " ] && still || bad "external: stuck: $(mower), due $(gone_due)"
+outcome planner error gone
+[ "$(gone_due)" = "planner " ] || bad "external: one that failed not due without an answer"
+rm /fake/external
+for m in 1 "0 MOWING" "0 IDLE"; do
+  echo "$m" > /fake/mower
+  [ -z "$(gone_due)" ] || bad "external: one that failed due with OpenMower at $m"
+done
+outcome planner error not_docked
+for m in "0 MOWING" "0 IDLE"; do
+  echo "$m" > /fake/mower
+  ! still || bad "external: still at $m"
+  run again planner
+  [ ! -e /fake/c/pl ] && ! called 'compose pl .* build svc' || bad "external: built at $m: $(get planner)"
+done
+: > /fake/external
+run again planner
+[ "$(get planner | cut -d' ' -f1)" = updated ] && [ "$(cat /fake/c/pl/status)" = running ] && [ -z "$(get gone_planner)$(gone_due)" ] && [ "$(mower)" = "0 IDLE" ] ||
+  bad "external: not built while OpenMower doesn't answer: $(get planner)"
 fi
 
 [ $fails = 0 ]

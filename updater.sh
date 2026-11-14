@@ -89,6 +89,15 @@ mower() {
 docked() { [ "$(mower)" = 1 ]; }
 # OpenMower doesn't drive the mower: idle, in the dock or not, or no answer from it at all. no broker: no telling, so not
 quiet() { case $(mower) in 1 | "0 IDLE" | "0 unknown") return 0 ;; *) return 1 ;; esac; }
+# nothing drives the mower and nothing can send it out: idle in the dock, OpenMower removed for its update without a
+# copy, or OpenMower not answering while a build removed with it is missing (with OM_PLANNER=external it doesn't come up
+# without the planner)
+still() {
+  local m
+  gone "$OM" && return 0
+  m=$(mower)
+  [ "$m" = 1 ] || { [ "$m" = "0 unknown" ] && [ -n "$(gone_builds)" ]; }
+}
 # a value of OpenMower's parameters as rosparam gives them, one "key: value" a line, without the quotes round it
 pval() {
   local v
@@ -423,8 +432,19 @@ find_parts() {
   # shellcheck disable=SC2046
   status reach $(reach)
 }
-# only while the mower is idle in the dock (gate mower), or whenever (gate none: mowbite.update.gate=none)
-gate() { [ "$(get "$1_gate")" = none ] && echo none || echo mower; }
+# only while the mower is idle in the dock (gate mower), or whenever (gate none: mowbite.update.gate=none). a build
+# removed with OpenMower's version before also while nothing can drive the mower (gate still)
+gate() {
+  if [ "$(get "$1_gate")" = none ]; then
+    echo none
+  elif [ "$(kind "$1")" = build ] && gone "$(box "$1")"; then
+    echo still
+  else
+    echo mower
+  fi
+}
+# whether a gate lets a part be built or restarted right now
+gate_ok() { case $1 in none) return 0 ;; still) still ;; *) docked ;; esac; }
 # how a part shows it runs: mqtt (OpenMower: a fresh state from it), log:<line> (in its log since it started),
 # http:<url> (answers, ":port/path" on the container), health (docker's own healthcheck), up (half a minute without
 # a restart). from its labels, else what's known of it
@@ -780,13 +800,13 @@ END {
   print "@exit " (rc + 0)
 }'
 # a compose pull or build ($3...) with the progress of part $1: compose's exit code, 2 when the mower left the dock
-# meanwhile, for a part that waits for the dock (compose is stopped then: a build takes the mower's cpu)
+# meanwhile, for a part that waits for it (its gate $2; compose is stopped then: a build takes the mower's cpu)
 with_progress() {
   local part="$1" g="$2" watch rc
   shift 2
   rm -f "$STATE/left"
-  if [ "$g" = mower ]; then
-    (while sleep 30; do docked || { : > "$STATE/left"; pkill -f -- '--progress json'; exit 0; }; done) &
+  if [ "$g" != none ]; then
+    (while sleep 30; do gate_ok "$g" || { : > "$STATE/left"; pkill -f -- '--progress json'; exit 0; }; done) &
     watch=$!
   fi
   { "$@" 2>&1; echo "@exit $?"; } | awk -v sizes="$STATE/layers" -v logf="$LOG" "$progress_awk" | (
@@ -875,14 +895,15 @@ available() {
 # when compose can't start it or it doesn't answer. never built or pulled here: the image is there already (pulled,
 # built or the one before), a planner with pull_policy: build would be built once more and run on an image nobody
 # checked, one with pull_policy: always would get the new one back
-restart() {
+restart() { start_part "$1" && seen "$1" "$2"; }
+# started, without a look whether it runs
+start_part() {
   local force=
   progress "$1" restart
   # (one that runs an image that isn't there any more is made anew: compose takes it for the same and leaves it)
   docker image inspect "$(image_of "$(box "$1")")" > /dev/null 2>&1 || force=1
   compose $T_UP "$(box "$1")" up -d --no-deps --no-build --pull never ${force:+--force-recreate} "$(service "$(box "$1")")" >> "$LOG" 2>&1 || { log "$1: compose couldn't start it"; return 1; }
   rehold
-  seen "$1" "$2"
 }
 seen() {
   local c end ok how started s fw=
@@ -1353,11 +1374,13 @@ check_openmower() {
 # what's built on OpenMower's image ($1, its tag), built again on the one it runs now: after its update ($2 new), and
 # later for one that didn't get to it (stopped halfway, the mower out). without $2 only one this updater built before,
 # or one that was due on that image (<part>_rebuild: its id, noted before it waits). never while the mower isn't idle
-# in the dock (a build takes its cpu): 2 then
+# in the dock (a build takes its cpu), one removed with OpenMower's version before also while it's still: 2 then
 rebuild_on_om() {
   local p x base rc=0
   for p in $(part_ids); do
     [ "$(kind "$p")" = build ] && [ -z "$(get "pending_$p")" ] || continue
+    # (not once more in the same run)
+    case " $rebuilt " in *" $p "*) continue ;; esac
     base=$(base_of "$(box "$p")")
     if [ "$base" != "$1" ]; then
       [ -n "$base" ] && [ -n "$2" ] && log "$p: built on $base, not on $1, left as it is"
@@ -1367,14 +1390,13 @@ rebuild_on_om() {
     gone "$(box "$p")" || [ "$(get "${p}_base_id")" != "$(id_of "$1")" ] || continue
     [ -n "$2" ] || [ -n "$(get "${p}_base_id")" ] || [ "$(get "${p}_rebuild")" = "$(id_of "$1")" ] || continue
     status "${p}_rebuild" "$(id_of "$1")"
-    if ! docked; then
+    if ! case $(gate "$p") in still) still ;; *) docked ;; esac; then
       log "$p: the mower isn't idle in the dock, built on OpenMower's new version later"
       for x in $(noted); do gone "$(box "$x")" && outcome "$x" error gone_dock; done
       return 2
     fi
     build "$p" after_openmower
     [ $? -eq 2 ] && rc=2
-    # (not once more in the same run)
     rebuilt="$rebuilt $p"
   done
   return $rc
@@ -1666,6 +1688,11 @@ gone_note() {
 }
 # the builds noted for it
 noted() { sed -n 's/^gone_\([a-z0-9_]*\) .*/\1/p' "$STATUS" 2> /dev/null | grep -vx openmower; }
+# the ones not there again
+gone_builds() {
+  local p
+  for p in $(noted); do gone "$(box "$p")" && printf '%s ' "$p"; done
+}
 # a container stopped and removed through its stack, never its volumes (no -v)
 box_rm() {
   compose $T_UP "$1" rm -s -f "$(service "$1")" >> "$LOG" 2>&1
@@ -1807,7 +1834,8 @@ nokeep_drop() {
   status nokeep_openmower new "$(get nokeep_openmower | cut -d' ' -f2-)"
   status nokeep_holders
 }
-# downloaded, started and seen running, else the one before the same way. one already there only while it doesn't mow
+# downloaded, the builds that ran on it built again, all started and seen running, else the one before the same way.
+# one already there only while it doesn't mow
 nokeep_go() {
   local way target prev ref remote new why pull tag left d fw='' data=''
   # shellcheck disable=SC2046
@@ -1828,7 +1856,10 @@ nokeep_go() {
       return 1
     fi
   fi
-  [ "$way" = new ] || [ "$new" = - ] || drop_image "$new"
+  if [ "$way" != new ] && [ "$new" != - ]; then
+    nokeep_unbuild "$new"
+    drop_image "$new"
+  fi
   if ! exists "$OM"; then
     # (at night only the tries due, those come by themselves)
     if [ "$WHY" = night ] && [ -n "$(get openmower_missing)" ]; then
@@ -1854,7 +1885,10 @@ nokeep_go() {
       nokeep_missing
       return 1
     fi
-    # (held anew right before its start where a broker answers, nothing drives the mower meanwhile)
+  fi
+  nokeep_build "$tag"
+  # (held anew right before its start where a broker answers, nothing drives the mower meanwhile)
+  if ! exists "$OM"; then
     unhold
     hold openmower || log "openmower: MowBite's schedule isn't held, started all the same"
   fi
@@ -1871,6 +1905,7 @@ nokeep_go() {
       log "openmower: updated to $target, without a copy of the version before"
       outcome openmower updated "$(now)" "${target##*:}"
       status openmower_available no "$target"
+      nokeep_seen
       rebuild_on_om "$target" new
       return
     fi
@@ -1886,6 +1921,7 @@ nokeep_go() {
     else
       outcome openmower rolled_back ${fw:+"firmware"} ${data:+"$data"}
     fi
+    nokeep_seen
     rebuild_on_om "$ref" new
     return 1
   fi
@@ -1895,7 +1931,15 @@ nokeep_go() {
     log "openmower: the version before didn't run either"
     nokeep_off
     outcome openmower error rollback
+    nokeep_seen
     rebuild_on_om "$ref" new
+    return 1
+  fi
+  # (not seen while a build it started with couldn't be built: not the new version's doing, it stays and is looked at
+  # again, with the build tried once more)
+  if [ -n "$nk_lack" ]; then
+    log "openmower: $target not seen running without$nk_lack, looked at again later"
+    outcome openmower unconfirmed
     return 1
   fi
   # the new version didn't run: left out as after any update, the one before from its registry again
@@ -1911,6 +1955,64 @@ nokeep_go() {
   log "openmower: $target didn't run, back to $prev from its registry"
   progress openmower back
   nokeep_go
+}
+# the builds removed with it that ran, built again on its tag $1 before it starts and started without a look: they wait
+# for its ROS master, and with OM_PLANNER=external it doesn't come up without the planner. nk_lack the ones that couldn't
+# be. a stopped one waits for OpenMower to run (rebuild_on_om)
+nokeep_build() {
+  local p c
+  nk_lack=
+  for p in $(gone_builds); do
+    c=$(box "$p")
+    [ "$(base_of "$c")" = "$1" ] && [ "$(gone_of "$c" | cut -d' ' -f3)" = running ] || continue
+    # (not once more in the same run)
+    rebuilt="$rebuilt $p"
+    # shellcheck disable=SC2046
+    set -- "$1" $(gone_of "$c" | cut -d' ' -f6-)
+    if ! still; then
+      log "$p: the mower isn't idle in the dock, built later"
+      outcome "$p" error gone_dock
+    elif ! room_for $ROOM_BUILD; then
+      log "$p: less than $ROOM_BUILD MB free, not built"
+      outcome "$p" nospace $ROOM_BUILD "$(free_mb)"
+    else
+      log "$p: removed with OpenMower's version before, building ($(said_of "$2" "$3" "$4")) before it starts"
+      build_image "$p" "$2" still && start_part "$p" && continue
+      log "$p: not built again"
+      outcome "$p" error gone
+    fi
+    nk_lack="$nk_lack $p"
+  done
+}
+# the builds started with it, each seen running by its own look: noted as built, else removed again
+nokeep_seen() {
+  local p c
+  for p in $(noted); do
+    c=$(box "$p")
+    exists "$c" || continue
+    # shellcheck disable=SC2046
+    set -- $(gone_of "$c" | cut -d' ' -f6-)
+    if seen "$p" "$(id_of "$(ref_of "$c")")"; then
+      build_done "$p" "${1:-}" "${2:-}" "${3:-}" "$(base_of "$c")"
+      log "$p: running again"
+    else
+      box_rm "$c"
+      log "$p: didn't run on its new build, removed again"
+      outcome "$p" error gone
+    fi
+  done
+}
+# the builds made on its new version ($1, while that's here) removed again with it, their notes kept: they hold its
+# layers
+nokeep_unbuild() {
+  local p c i
+  docker image inspect "$1" > /dev/null 2>&1 || return 0
+  for p in $(noted); do
+    c=$(box "$p")
+    exists "$c" || continue
+    i=$(image_of "$c")
+    if box_rm "$c"; then drop_image "$i"; else log "$p: its container $c can't be removed"; fi
+  done
 }
 # why a download of the new version can never work as it is, from what compose said since "downloading <ref>" in the
 # log: no room left (nospace), its registry doesn't have it or lets nobody have it (unknown)
@@ -2143,9 +2245,10 @@ build_key() { echo "$1${2:+ $(id_of "$2")}"; }
 # down whole). one stopped by hand is made anew on it and stays stopped. one removed with OpenMower's version before
 # (gone_<part>) is built anew from what was noted then, nothing to go back to: not started it stays removed
 build() {
-  local p="$1" c base commit name how ctx img before ran back rc built fail stopped='' new=''
+  local p="$1" c g base commit name how img before ran back rc built fail stopped='' new=''
   c=$(box "$p")
   gone "$c" && new=1
+  g=$(gate "$p")
   progress "$p" prepare
   base=$(base_of "$c")
   if [ -n "$base" ] && ! docker image inspect "$base" > /dev/null 2>&1; then
@@ -2196,17 +2299,13 @@ build() {
     [ -n "$back" ] || { log "$p: the version before can't be kept, not built"; outcome "$p" error keep; return 1; }
     log "$p: kept the version before as $back, building ($2)"
   fi
-  : > "$STATE/layers"
-  ctx=
-  [ -n "$commit" ] && ctx=$(context_file "$p" "$commit")
-  with_progress "$p" "$(gate "$p")" compose $T_BUILD "$c" ${ctx:+-f "$ctx"} --progress json build "$(service "$c")"
+  build_image "$p" "$commit" "$g"
   rc=$?
-  [ -n "$ctx" ] && rm -f "$ctx"
   [ $rc -eq 0 ] || [ $rc -eq 2 ] || log "$p: the build failed${back:+, the one before keeps running}"
   # (with MowBite's schedule held: the mower relies on it while it mows)
-  if [ $rc -eq 0 ] && [ "$(gate "$p")" = mower ] && ! hold "$p"; then
+  if [ $rc -eq 0 ] && [ "$g" != none ] && ! hold "$p"; then
     rc=4
-  elif [ $rc -eq 0 ] && [ "$(gate "$p")" = mower ] && ! docked; then
+  elif [ $rc -eq 0 ] && ! gate_ok "$g"; then
     log "$p: the mower left the dock, the one before keeps running"
     rc=2
   fi
@@ -2249,14 +2348,29 @@ build() {
     status "pending_$p"
     log "$p: running again"
   fi
+  build_done "$p" "$commit" "$name" "$how" "$base" "$stopped"
+}
+# its image built from its own context, at commit $2 (none: as its stack says), while its gate $3 lets it
+build_image() {
+  local ctx='' rc
+  : > "$STATE/layers"
+  [ -n "$2" ] && ctx=$(context_file "$1" "$2")
+  with_progress "$1" "$3" compose $T_BUILD "$(box "$1")" ${ctx:+-f "$ctx"} --progress json build "$(service "$(box "$1")")"
+  rc=$?
+  [ -n "$ctx" ] && rm -f "$ctx"
+  return $rc
+}
+# what's noted of a build made on its new image: built from commit $2 ($3 its name, $4 release or branch) on base $5,
+# runs, or stopped ($6)
+build_done() {
   status "gone_$1"
-  status "$1_image" "$(image_of "$c")"
-  status "$1_built" "$commit"
-  release_name "$p" "$name" "$how"
-  [ -n "$base" ] && status "$1_base_id" "$(id_of "$base")"
+  status "$1_image" "$(image_of "$(box "$1")")"
+  status "$1_built" "$2"
+  release_name "$1" "$3" "$4"
+  [ -n "$5" ] && status "$1_base_id" "$(id_of "$5")"
   status "$1_rebuild"
-  if [ -n "$stopped" ]; then outcome "$p" stopped; else outcome "$p" updated "$(now)" "$(said_of "$commit" "$name" "$how")"; fi
-  [ -n "$commit" ] && status "${p}_available" no "${name:-main}"
+  if [ -n "${6:-}" ]; then outcome "$1" stopped; else outcome "$1" updated "$(now)" "$(said_of "$2" "$3" "$4")"; fi
+  [ -n "$2" ] && status "$1_available" no "${3:-main}"
   return 0
 }
 
@@ -2905,7 +3019,7 @@ run() {
     # (built on OpenMower's new version in this run already)
     case " $rebuilt " in *" $p "*) continue ;; esac
     # (asked for: a part left as it was says why on its card. OpenMower's update without a copy looks for itself)
-    if [ "$(gate "$p")" = mower ] && ! nokeep_open "$p" && ! docked; then
+    if ! nokeep_open "$p" && ! gate_ok "$(gate "$p")"; then
       waited=1
       [ -n "$MANUAL" ] && outcome "$p" error not_docked
       continue
@@ -2938,6 +3052,7 @@ run() {
 
 # one thing asked for a part on its own ($1), on its page like a run of that part: what $2... does
 alone() {
+  rebuilt=
   status run_parts "$1"
   status result running
   status taken
@@ -2963,12 +3078,14 @@ nokeep_due() {
   [ "$(now)" -ge "$next" ]
 }
 
-# the builds removed with OpenMower's version before and not built since, none of them failed: built when the mower is
-# idle in the dock, looked at every NOKEEP_EVERY
+# the builds removed with OpenMower's version before and not built since: built when the mower is still, looked at
+# every NOKEEP_EVERY. one that failed only while OpenMower doesn't answer, without it nothing runs
 gone_due() {
   local p
   ! nokeep_busy && [ "$(now)" -ge "${gone_next:-0}" ] || return 0
-  for p in $(noted); do gone "$(box "$p")" && [ "$(get "$p")" != "error gone" ] && printf '%s ' "$p"; done
+  for p in $(gone_builds); do
+    [ "$(get "$p")" != "error gone" ] || [ "$(mower)" = "0 unknown" ] && printf '%s ' "$p"
+  done
 }
 
 # the parts set to update by themselves
@@ -3155,7 +3272,7 @@ while :; do
   fi
   nk_start=
   parts=$(gone_due)
-  if [ -n "$parts" ] && docked; then
+  if [ -n "$parts" ] && still; then
     gone_next=$(($(now) + NOKEEP_EVERY))
     # shellcheck disable=SC2086
     run again $parts
