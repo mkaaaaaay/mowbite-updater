@@ -257,6 +257,122 @@ const DE = {
   'No more tries by itself: tap Try again.': 'Keine Versuche von selbst mehr: auf Erneut versuchen tippen.',
   'By hand in a terminal on the mower, the new version:': 'Von Hand in einem Terminal auf dem Mäher, die neue Version:',
   'or the version before:': 'oder die vorige Version:',
+  // MowBite OS in OpenMower's place
+  'Switching to MowBite OS…': 'Wechselt zu MowBite OS…',
+  'Going back to OpenMower…': 'Geht zurück zu OpenMower…',
+  "OpenMower isn't back yet": 'OpenMower ist noch nicht zurück',
+  "MowBite OS didn't run, OpenMower runs again": 'MowBite OS lief nicht, OpenMower läuft wieder',
+  "More on OpenMower's card below.": 'Mehr auf der Karte von OpenMower unten.',
+  "MowBite OS can take OpenMower's place on this mower. OpenMower's data is kept and OpenMower stopped, then MowBite OS is started and checked. If it doesn't run as it should, OpenMower comes back as it was.":
+    'MowBite OS kann auf diesem Mäher an die Stelle von OpenMower treten. Die Daten von OpenMower werden gesichert und OpenMower gestoppt, dann wird MowBite OS gestartet und geprüft. Läuft es nicht wie erwartet, kommt OpenMower zurück, wie es war.',
+  "MowBite OS takes over OpenMower's map and mower_params.yaml.": 'MowBite OS übernimmt die Karte und die mower_params.yaml von OpenMower.',
+  "MowBite OS starts with its own map and settings from the last time it ran, not with OpenMower's current ones.":
+    'MowBite OS startet mit seiner eigenen Karte und seinen Einstellungen vom letzten Mal, nicht mit den jetzigen von OpenMower.',
+  "There isn't room for both: OpenMower's version is deleted first and downloaded again on the way back (that needs the internet).":
+    'Für beide ist kein Platz: Die Version von OpenMower wird zuerst gelöscht und auf dem Rückweg neu geladen (das braucht Internet).',
+  'Download: {size}. Only with the mower ready in the dock.': 'Download: {size}. Nur mit dem Mäher bereit im Dock.',
+  'Only with the mower ready in the dock.': 'Nur mit dem Mäher bereit im Dock.',
+  'Switch to MowBite OS': 'Zu MowBite OS wechseln',
+  'Really switch?': 'Wirklich wechseln?',
+  "Switching to MowBite OS isn't possible right now: {why}.": 'Der Wechsel zu MowBite OS geht gerade nicht: {why}.',
+  "the version of MowBite OS that's set can't be found": 'die eingestellte Version von MowBite OS ist nicht zu finden',
+  "there's no answer from where MowBite OS is downloaded (does the mower have internet?)": 'keine Antwort von dort, wo MowBite OS geladen wird (hat der Mäher Internet?)',
+  "OpenMower's map and settings aren't in folders on the mower that MowBite OS could take them from":
+    'Karte und Einstellungen von OpenMower liegen nicht in Ordnern auf dem Mäher, aus denen MowBite OS sie übernehmen kann',
+  'mower_params.yaml has no position for the map (datum_lat and datum_long)': 'die mower_params.yaml hat keine Position für die Karte (datum_lat und datum_long)',
+  "this version of MowBite OS can't take over OpenMower's map": 'diese Version von MowBite OS kann die Karte von OpenMower nicht übernehmen',
+  'this version of MowBite OS has no setup for this mower': 'diese Version von MowBite OS bringt keine Einrichtung für diesen Mäher mit',
+  "OpenMower doesn't run right now": 'OpenMower läuft gerade nicht',
+  "OpenMower's update without a copy isn't finished yet": 'das Update von OpenMower ohne Kopie ist noch nicht fertig',
+  'something else has to be finished first (an update, data put back or a calibration)': 'erst muss etwas anderes fertig werden (ein Update, zurückgespielte Daten oder eine Kalibrierung)',
+  "there's a MowBite OS on the mower already that the updater didn't set up, it leaves that alone":
+    'auf dem Mäher ist schon ein MowBite OS, das nicht der Updater eingerichtet hat, das lässt er in Ruhe',
+  "there's no room for both, and OpenMower's version couldn't be downloaded again for the way back":
+    'für beide ist kein Platz, und die Version von OpenMower ließe sich für den Rückweg nicht neu laden',
+  "there isn't room enough even with OpenMower's version deleted (needs about {need}, {has} there)":
+    'selbst ohne die Version von OpenMower reicht der Platz nicht (braucht etwa {need}, {has} da)',
+  'MowBite OS runs the mower since {when}. OpenMower is stopped, its data stays as it was.': 'MowBite OS steuert den Mäher seit {when}. OpenMower ist gestoppt, seine Daten bleiben, wie sie waren.',
+  'On the way back OpenMower gets the map from MowBite OS and is started and checked again. Only with the mower ready in the dock.':
+    'Auf dem Rückweg bekommt OpenMower die Karte von MowBite OS und wird wieder gestartet und geprüft. Nur mit dem Mäher bereit im Dock.',
+  "OpenMower's version is downloaded again, that needs the internet.": 'Die Version von OpenMower wird neu geladen, das braucht Internet.',
+  'Back to OpenMower': 'Zurück zu OpenMower',
+  "The way back to OpenMower stopped halfway, OpenMower doesn't run yet.": 'Der Rückweg zu OpenMower blieb auf halber Strecke stehen, OpenMower läuft noch nicht.',
+  'Continue the way back': 'Rückweg fortsetzen',
+  'Really continue?': 'Wirklich fortsetzen?',
+  'Switching to MowBite OS': 'Wechsel zu MowBite OS',
+  "If MowBite OS doesn't run as it should, OpenMower comes back as it was.": 'Läuft MowBite OS nicht wie erwartet, kommt OpenMower zurück, wie es war.',
+  'The mower can mow again once OpenMower runs.': 'Der Mäher kann wieder mähen, sobald OpenMower läuft.',
+  "MowBite OS didn't run as it should: {why}. OpenMower comes back as it was.": 'MowBite OS lief nicht wie erwartet: {why}. OpenMower kommt zurück, wie es war.',
+  'The switch was given up: {why}. OpenMower comes back as it was.': 'Der Wechsel wurde abgebrochen: {why}. OpenMower kommt zurück, wie es war.',
+  'the schedule starts the mower {when}': 'der Zeitplan startet den Mäher {when}',
+  "MowBite's schedule couldn't be held": 'der Zeitplan von MowBite ließ sich nicht anhalten',
+  "the mower wasn't ready in the dock": 'der Mäher stand nicht bereit im Dock',
+  "something couldn't be stopped": 'etwas ließ sich nicht stoppen',
+  "something else still answers on the mower's MQTT port": 'auf dem MQTT-Port des Mähers antwortet noch etwas anderes',
+  "OpenMower's version can't be downloaded right now, it would be needed for the way back": 'die Version von OpenMower lässt sich gerade nicht laden, sie wäre für den Rückweg nötig',
+  "OpenMower's data couldn't be kept first": 'die Daten von OpenMower ließen sich vorher nicht sichern',
+  "MowBite OS couldn't be downloaded": 'MowBite OS ließ sich nicht laden',
+  "A safety check in MowBite OS's setup failed, so it won't drive on its own. OpenMower doesn't know this check and will mow again without it.":
+    'Eine Sicherheitsprüfung in der Einrichtung von MowBite OS ist fehlgeschlagen, deshalb fährt es nicht selbstständig. OpenMower kennt diese Prüfung nicht und mäht ohne sie wieder.',
+  'Bringing OpenMower back': 'Holt OpenMower zurück',
+  "Keeping OpenMower's data": 'Sichert die Daten von OpenMower',
+  'Downloading MowBite OS': 'Lädt MowBite OS',
+  'Stopping OpenMower': 'Stoppt OpenMower',
+  "Deleting OpenMower's version": 'Löscht die Version von OpenMower',
+  'Starting MowBite OS': 'Startet MowBite OS',
+  'Checking that MowBite OS runs': 'Prüft, ob MowBite OS läuft',
+  'Taking the map from MowBite OS': 'Holt die Karte aus MowBite OS',
+  'Stopping MowBite OS': 'Stoppt MowBite OS',
+  'Downloading OpenMower again': 'Lädt OpenMower neu',
+  'Handing the map to OpenMower': 'Gibt OpenMower die Karte',
+  "Keeping OpenMower's map from before": 'Behält die Karte von OpenMower von vorher',
+  'Starting OpenMower': 'Startet OpenMower',
+  "OpenMower's data kept": 'Daten von OpenMower gesichert',
+  'MowBite OS downloaded': 'MowBite OS geladen',
+  'OpenMower stopped': 'OpenMower gestoppt',
+  "OpenMower's version deleted": 'Version von OpenMower gelöscht',
+  'MowBite OS started': 'MowBite OS gestartet',
+  'MowBite OS checked': 'MowBite OS geprüft',
+  'Map taken from MowBite OS': 'Karte aus MowBite OS geholt',
+  'No map from MowBite OS, OpenMower keeps its own': 'Keine Karte aus MowBite OS, OpenMower behält seine',
+  'MowBite OS stopped': 'MowBite OS gestoppt',
+  'OpenMower downloaded again': 'OpenMower neu geladen',
+  'Map handed to OpenMower': 'Karte an OpenMower übergeben',
+  "OpenMower's map from before kept": 'Karte von OpenMower von vorher behalten',
+  'OpenMower started': 'OpenMower gestartet',
+  "switched to MowBite OS, it took over OpenMower's map and settings": 'zu MowBite OS gewechselt, es hat Karte und Einstellungen von OpenMower übernommen',
+  'switched to MowBite OS, with its own data from before': 'zu MowBite OS gewechselt, mit seinen eigenen Daten von vorher',
+  "MowBite OS didn't run as it should: {why}. OpenMower runs again as before.": 'MowBite OS lief nicht wie erwartet: {why}. OpenMower läuft wieder wie vorher.',
+  "it didn't start": 'es ist nicht gestartet',
+  "it didn't get ready in time": 'es wurde nicht rechtzeitig bereit',
+  'it stopped itself because of a fault': 'es hat sich wegen eines Fehlers selbst angehalten',
+  "it didn't answer as MowBite OS for this mower": 'es hat sich nicht als MowBite OS für diesen Mäher gemeldet',
+  "it didn't report the mower's state": 'es hat den Zustand des Mähers nicht gemeldet',
+  'the mower stayed in emergency stop': 'der Mäher blieb im Notaus',
+  "a part of it couldn't be downloaded": 'ein Teil davon ließ sich nicht laden',
+  'its setup for this mower is missing': 'seine Einrichtung für diesen Mäher fehlt',
+  "it can't take over OpenMower's map": 'es kann die Karte von OpenMower nicht übernehmen',
+  'back on OpenMower, with the map from MowBite OS': 'zurück auf OpenMower, mit der Karte aus MowBite OS',
+  "back on OpenMower with the map from MowBite OS, some areas couldn't be taken over": 'zurück auf OpenMower mit der Karte aus MowBite OS, manche Flächen ließen sich nicht übernehmen',
+  'back on OpenMower, with its own map from before the switch': 'zurück auf OpenMower, mit seiner eigenen Karte von vor dem Wechsel',
+  "nothing done: it isn't possible right now": 'nicht gemacht: Das geht gerade nicht',
+  "nothing done: MowBite's schedule couldn't be held": 'nicht gemacht: Der Zeitplan von MowBite ließ sich nicht anhalten',
+  "nothing done: OpenMower's data couldn't be kept first": 'nicht gemacht: Die Daten von OpenMower ließen sich vorher nicht sichern',
+  "nothing done: MowBite OS couldn't be downloaded. Does the mower have internet?": 'nicht gemacht: MowBite OS ließ sich nicht laden. Hat der Mäher Internet?',
+  'nothing done: this version of MowBite OS has no setup for this mower': 'nicht gemacht: Diese Version von MowBite OS bringt keine Einrichtung für diesen Mäher mit',
+  "nothing done: this version of MowBite OS can't take over OpenMower's map": 'nicht gemacht: Diese Version von MowBite OS kann die Karte von OpenMower nicht übernehmen',
+  "something couldn't be stopped, see the log": 'etwas ließ sich nicht stoppen, siehe Log',
+  "something else still answers on the mower's MQTT port, MowBite OS can't run next to it. OpenMower runs again as before.":
+    'auf dem MQTT-Port des Mähers antwortet noch etwas anderes, daneben kann MowBite OS nicht laufen. OpenMower läuft wieder wie vorher.',
+  "nothing deleted: OpenMower's version can't be downloaded right now, it would be needed for the way back. OpenMower runs again as before.":
+    'nichts gelöscht: Die Version von OpenMower lässt sich gerade nicht laden, sie wäre für den Rückweg nötig. OpenMower läuft wieder wie vorher.',
+  "MowBite OS wasn't idle in the dock, it stays. Tap again when the mower is ready in the dock.":
+    'MowBite OS stand nicht ruhig im Dock, es bleibt. Noch einmal tippen, wenn der Mäher bereit im Dock steht.',
+  "OpenMower didn't come back, the mower can't mow. Tap Continue the way back.": 'OpenMower kam nicht zurück, der Mäher kann nicht mähen. Auf Rückweg fortsetzen tippen.',
+  'stopped before anything changed (the mower or the updater restarted), OpenMower stays':
+    'abgebrochen, bevor sich etwas geändert hat (der Mäher oder der Updater startete neu), OpenMower bleibt',
+  "not done: stopped while MowBite OS runs in OpenMower's place": 'nicht gemacht: gestoppt, solange MowBite OS an Stelle von OpenMower läuft',
+  'Stopped with OpenMower, it starts again once OpenMower is back.': 'Mit OpenMower gestoppt, es startet wieder, sobald OpenMower zurück ist.',
   // when
   'When it updates by itself': 'Wann automatisch aktualisiert wird',
   'At': 'Um',
@@ -480,6 +596,7 @@ function whereOf(query) {
   if ((k === 'now' || k === 'back' || k === 'nokeep') && v) return v;
   if (k === 'data' && v) return wordOf(query).slice('data:'.length);
   if (k === 'self') return 'updater';
+  if (k === 'switch') return 'os';
   if (k === 'room' || k === 'free') return 'room';
   if (k === 'containers' || k === 'logs' || k === 'restart') return 'containers';
   return 'overview';
@@ -635,7 +752,7 @@ function installed(p, picker) {
     v = name && d ? tr('{v} from {d}', {v: name, d}) : name || d || tr('state unknown');
     if (p.kind === 'image') v += chan;
   }
-  return v;
+  return p.kind === 'openmower' && osParked(p) ? v + ' · ' + tr('stopped') : v;
 }
 // what runs and the channel to pick, as in MowBite
 const facts = (p, picker) => h('div', {class: 'facts'}, h('span', null, tr('Runs')), h('span', null, installed(p, picker)),
@@ -741,6 +858,7 @@ function result(p) {
       // (OpenMower, in the 30 minutes before MowBite's schedule may start the mower)
       if (rest[0] === 'schedule') return ok(tr('not done: the schedule starts the mower {when}, OpenMower is left alone until then', {when: when(rest[1])}));
       if (rest[0] === 'no_back') return warn(tr('there is no version before to go back to'));
+      if (rest[0] === 'os') return ok(tr("not done: stopped while MowBite OS runs in OpenMower's place"));
       if (rest[0] === 'back') return warn(tr("The version before didn't start, the one from before runs again."));
       if (rest[0] === 'compose' && p.id === 'updater') return {text: tr("The updater doesn't run from a compose file and can't update itself."), level: 'error'};
       // (a build changes no compose file: the stopped one couldn't be made anew on it)
@@ -763,13 +881,15 @@ function openLog() {
 function resultLine(p) {
   // (a part that only waited for the dock: what to do is said once at the top)
   const waited = S('result') === 'waiting' && S(p.id) === 'error not_docked';
-  const r = waited ? {text: tr("not done: the mower wasn't ready in the dock"), level: 'ok'} : result(p);
+  return lastLine(waited ? {text: tr("not done: the mower wasn't ready in the dock"), level: 'ok'} : result(p), resultAt(p), p.id);
+}
+// a last result and when: dim as it should be, yellow, red with the log
+function lastLine(r, at, key) {
   if (!r) return null;
-  const at = resultAt(p);
   const text = at !== null ? tr('Last time ({when}): {what}', {when: when(at), what: r.text}) : tr('Last time: {what}', {what: r.text});
   if (r.level === 'ok') return dim(text);
   if (r.level === 'warn') return h('p', {class: 'warn'}, text);
-  const link = !locked && st.log && st.log.length > 0 && h('button', {class: 'link', 'data-key': 'log:' + p.id, onclick: openLog}, tr('Open the log'));
+  const link = !locked && st.log && st.log.length > 0 && h('button', {class: 'link', 'data-key': 'log:' + key, onclick: openLog}, tr('Open the log'));
   return h('p', {class: 'error'}, text, link && [' ', link]);
 }
 // a part whose last update went wrong lately, for the top: red for a failure (within 3 days when the updater says when,
@@ -810,6 +930,7 @@ function noteStep() {
 }
 const didntRun = (p) => p.step === 'back' && ['restart', 'wait'].includes(stepBefore[p.part]) && askedFor !== 'back=' + p.part;
 function stepLabel(p) {
+  if (p.label) return p.label;
   if (didntRun(p)) return tr("The new version didn't run, back to the one before");
   return tr(
     {
@@ -847,6 +968,8 @@ function stepsOf(id, step) {
 }
 // how far, besides the time it's on it
 function stepDetail(p) {
+  // (a step of the way to MowBite OS or back: what its bar does in it)
+  if (p.pstep) p = {...p, step: p.pstep};
   if (p.step === 'extract' && p.of) return tr('{n} of {of} layers', {n: p.done || 0, of: p.of});
   if (p.step === 'build' && p.of) return tr('step {n} of {of}', {n: Math.min(p.of, (p.done || 0) + 1), of: p.of});
   if (p.pct !== null && p.step === 'download') return p.pct + ' %';
@@ -861,6 +984,7 @@ function runText() {
   if (!running()) return null;
   const p = progressNow();
   const parts = runParts();
+  if (parts.includes('os')) return tr(osWay() === 'os' && !osUndo() ?'Switching to MowBite OS…' : 'Going back to OpenMower…');
   const part = p && ALL().find((x) => x.id === p.part);
   if (!part || !parts.includes(p.part)) return tr('Updating right now…');
   if (parts.length === 1) return tr('Updating {name}…', {name: nameOf(part)});
@@ -1022,7 +1146,7 @@ function fromTap(p) {
 function bar(p) {
   const label = stepLabel(p);
   const detail = stepDetail(p);
-  return h('div', {class: 'progress' + (didntRun(p) ? ' warnbar' : '')},
+  return h('div', {class: 'progress' + (didntRun(p) || p.warn ? ' warnbar' : '')},
     h('div', {class: 'track', role: 'progressbar', 'aria-label': label, 'aria-valuetext': [label, detail].filter(Boolean).join(', '),
       'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': p.pct === null ? undefined : p.pct},
     p.pct === null ? h('div', {class: 'moving'}) : h('div', {class: 'fill', style: 'width:' + p.pct + '%'})),
@@ -1039,17 +1163,18 @@ function tick() {
   e.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>';
   return e;
 }
-// a part's run in its card, as in MowBite: its steps, the done ones ticked, on the one it's on the bar
+// a run's steps, the done ones ticked, on the one it's on the bar
+const stepList = (steps, at, prog, label, done) => h('ol', {class: 'steps'}, steps.map((step, i) =>
+  h('li', {'data-step': step, class: i < at ? 'done' : i === at ? 'now' + (didntRun(prog) ? ' held' : '') : null},
+    h('span', {class: 'stepDot'}, i < at ? tick() : i === at ? h('i') : String(i + 1)),
+    h('span', null, h('b', null, i < at ? done(step) : label(step)), i === at && bar(prog)))));
+// a part's run in its card, as in MowBite
 function runCard(p, prog, ...more) {
   const steps = stepsOf(p.id, prog.step);
-  const at = steps.indexOf(prog.step);
   const back = steps.includes('back');
   return h('div', {class: 'card run', 'data-update': p.id},
     h('h3', null, tr(back ? '{name} goes back' : '{name} is being updated', {name: nameOf(p)})),
-    h('ol', {class: 'steps'}, steps.map((step, i) =>
-      h('li', {'data-step': step, class: i < at ? 'done' : i === at ? 'now' + (didntRun(prog) ? ' held' : '') : null},
-        h('span', {class: 'stepDot'}, i < at ? tick() : i === at ? h('i') : String(i + 1)),
-        h('span', null, h('b', null, i < at ? tr(STEP_DONE[step]) : stepLabel({...prog, step})), i === at && bar(prog))))),
+    stepList(steps, steps.indexOf(prog.step), prog, (step) => stepLabel({...prog, step}), (step) => tr(STEP_DONE[step])),
     more);
 }
 // where a part is in what runs: its step now, asked and not on it yet, or in line behind another
@@ -1073,7 +1198,7 @@ function inLine(id) {
 // the one button of a card, only when there's something to do: what's new, a version built here to swap, or not known.
 // none while it's in line for it (on it, its card shows the run)
 function actButton(p) {
-  if (p.kind === 'local' || p.kind === 'os' || place(p.id).queued) return null;
+  if (p.kind === 'local' || p.kind === 'os' || place(p.id).queued || osParked(p)) return null;
   // (it can't update itself from outside its compose file)
   if (p.id === 'updater' && (S('updater_away') || S('updater_available') === 'unknown none')) return null;
   const a = avail(p.id);
@@ -1147,11 +1272,211 @@ function missing() {
   ];
 }
 
+// MowBite OS in OpenMower's place, on OpenMower's card. os_switch: "yes <MB> keep|drop import|kept" offered, "no <why>
+// [<MB needed> <MB there>]", "on <since>". switch_os: its step there ("os <step>") or back ("openmower <step> [map|old
+// [lost]]", the way there given up: "os back rolled_back|error <why>"). os and os_at: how the last one ended. os_safety
+// check_failed: on it, its lock for driving by itself closed
+const osBusy = () => !!(S('switch_os') || S('os_ran'));
+const osUndo = () => S('switch_os').startsWith('os back ');
+// a part left alone next to MowBite OS: OpenMower, what was stopped or deleted with it
+const osParked = (p) => osBusy() && (p.kind === 'openmower' || S('os_ran').split(' ').some((x) => x.startsWith(p.container + ':')) || !!S('gone_' + p.id));
+// which way it goes while it's asked for or runs: 'os' there, 'openmower' back
+function osWay() {
+  if (askedSince('switch:os') !== null) return 'os';
+  if (askedSince('switch:openmower') !== null) return 'openmower';
+  const way = S('switch_os').split(' ')[0];
+  if (way) return way === 'os' ? 'os' : 'openmower';
+  return running() && runParts().includes('os') ? (S('os_switch').startsWith('on ') ? 'openmower' : 'os') : null;
+}
+// each step on the way, while it's on it and once it's done
+const OS_THERE = {
+  prepare: ["Keeping OpenMower's data", "OpenMower's data kept"],
+  pull: ['Downloading MowBite OS', 'MowBite OS downloaded'],
+  stop: ['Stopping OpenMower', 'OpenMower stopped'],
+  drop: ["Deleting OpenMower's version", "OpenMower's version deleted"],
+  start: ['Starting MowBite OS', 'MowBite OS started'],
+  wait: ['Checking that MowBite OS runs', 'MowBite OS checked'],
+};
+const OS_BACK = {
+  export: ['Taking the map from MowBite OS', 'Map taken from MowBite OS'],
+  stop: ['Stopping MowBite OS', 'MowBite OS stopped'],
+  om: ['Downloading OpenMower again', 'OpenMower downloaded again'],
+  data: ['Handing the map to OpenMower', 'Map handed to OpenMower'],
+  start: ['Starting OpenMower', 'OpenMower started'],
+};
+// the way while it runs, is asked for or stopped halfway there (on again at the updater's start): its steps, the one
+// it's on with the bar of what it does in it, and whether it went back to OpenMower on the way there
+function osRun() {
+  const [way, step, how] = S('switch_os').split(' ');
+  const on = running() && runParts().includes('os');
+  const tap = askedSince('switch:os') !== null ? askedSince('switch:os') : askedSince('switch:openmower');
+  const go = osWay();
+  if (!go || !(on || tap !== null || way === 'os')) return null;
+  const drop = !!S('os_drop') || S('os_switch').split(' ')[2] === 'drop';
+  const steps = go === 'os' ? (drop ? ['prepare', 'stop', 'drop', 'pull', 'start', 'wait'] : ['prepare', 'pull', 'stop', 'start', 'wait'])
+    : ['export', 'stop', ...(S('os_drop') ? ['om'] : []), 'data', 'start'];
+  const at = way ? step : steps[0];
+  if (!steps.includes(at)) steps.push(at);
+  const [part, pstep, pct, since, done, of] = S('progress').split(' ');
+  const n = (x) => (/^\d+$/.test(x || '') ? Number(x) : undefined);
+  const mine = on && part === 'os';
+  const prog = {part: 'os', step: at, pstep: mine ? pstep : null, pct: mine && n(pct) !== undefined ? Math.min(100, n(pct)) : null,
+    since: (mine && n(since)) || tap, done: mine ? n(done) : undefined, of: mine ? n(of) : undefined};
+  return {go, steps, at: steps.indexOf(at), prog, old: how === 'old', undo: osUndo()};
+}
+function osRunCard(run) {
+  const {go, steps, at, prog, old} = run;
+  if (run.undo) {
+    const label = tr(prog.pstep === 'stop' ? 'Stopping MowBite OS' : ['download', 'extract'].includes(prog.pstep) ? 'Downloading OpenMower again' : 'Bringing OpenMower back');
+    // (switch_os "os back rolled_back|error <why>")
+    const [, , kind, why, t] = S('switch_os').split(' ');
+    const given = kind === 'rolled_back'
+      ? tr("MowBite OS didn't run as it should: {why}. OpenMower comes back as it was.", {why: OS_WHY[why] ? tr(OS_WHY[why]) : why || '?'})
+      : tr('The switch was given up: {why}. OpenMower comes back as it was.',
+        {why: why === 'schedule' ? tr('the schedule starts the mower {when}', {when: when(t)}) : OS_GIVEN_UP[why] ? tr(OS_GIVEN_UP[why]) : why || '?'});
+    return h('div', {class: 'card run', 'data-update': 'os'},
+      h('h3', null, tr('Back to OpenMower')),
+      h('p', {class: 'warn'}, given),
+      h('div', {class: 'busy'}, h('b', null, label + '…'), bar({...prog, label, warn: true})),
+      failedHere('os'));
+  }
+  // (no map from MowBite OS: OpenMower keeps its own)
+  const names = (s) => (go === 'os' ? OS_THERE : OS_BACK)[s] || [s, s];
+  const doing = (s) => tr(old && s === 'data' ? "Keeping OpenMower's map from before" : names(s)[0]);
+  const did = (s) => tr(old && s === 'export' ? 'No map from MowBite OS, OpenMower keeps its own' : old && s === 'data' ? "OpenMower's map from before kept" : names(s)[1]);
+  return h('div', {class: 'card run', 'data-update': 'os'},
+    h('h3', null, tr(go === 'os' ? 'Switching to MowBite OS' : 'Back to OpenMower')),
+    stepList(steps, at, {...prog, label: doing(prog.step)}, doing, did),
+    dim(tr(go === 'os' ? "If MowBite OS doesn't run as it should, OpenMower comes back as it was." : 'The mower can mow again once OpenMower runs.')),
+    failedHere('os'));
+}
+// why it isn't offered (os_switch "no <why>")
+const OS_NOT = {
+  image: "the version of MowBite OS that's set can't be found",
+  registry: "there's no answer from where MowBite OS is downloaded (does the mower have internet?)",
+  data: "OpenMower's map and settings aren't in folders on the mower that MowBite OS could take them from",
+  datum: 'mower_params.yaml has no position for the map (datum_lat and datum_long)',
+  import: "this version of MowBite OS can't take over OpenMower's map",
+  files: 'this version of MowBite OS has no setup for this mower',
+  openmower: "OpenMower doesn't run right now",
+  nokeep: "OpenMower's update without a copy isn't finished yet",
+  pending: 'something else has to be finished first (an update, data put back or a calibration)',
+  stack: "there's a MowBite OS on the mower already that the updater didn't set up, it leaves that alone",
+  prev: "there's no room for both, and OpenMower's version couldn't be downloaded again for the way back",
+};
+// why MowBite OS was given up and OpenMower runs again (os "rolled_back <why>")
+const OS_WHY = {
+  start: "it didn't start",
+  health: "it didn't get ready in time",
+  halt: 'it stopped itself because of a fault',
+  info: "it didn't answer as MowBite OS for this mower",
+  state: "it didn't report the mower's state",
+  emergency: 'the mower stayed in emergency stop',
+  pull: "a part of it couldn't be downloaded",
+  files: 'its setup for this mower is missing',
+  import: "it can't take over OpenMower's map",
+};
+// os "error <why>": schedule and not_docked as a part's
+const OS_ERRORS = {
+  offer: "nothing done: it isn't possible right now",
+  hold: "nothing done: MowBite's schedule couldn't be held",
+  keep: "nothing done: OpenMower's data couldn't be kept first",
+  pull: "nothing done: MowBite OS couldn't be downloaded. Does the mower have internet?",
+  files: 'nothing done: this version of MowBite OS has no setup for this mower',
+  import: "nothing done: this version of MowBite OS can't take over OpenMower's map",
+  stop: "something couldn't be stopped, see the log",
+  broker: "something else still answers on the mower's MQTT port, MowBite OS can't run next to it. OpenMower runs again as before.",
+  registry: "nothing deleted: OpenMower's version can't be downloaded right now, it would be needed for the way back. OpenMower runs again as before.",
+  busy: "MowBite OS wasn't idle in the dock, it stays. Tap again when the mower is ready in the dock.",
+  back: "OpenMower didn't come back, the mower can't mow. Tap Continue the way back.",
+  interrupted: 'stopped before anything changed (the mower or the updater restarted), OpenMower stays',
+};
+// why the way there was given up after OpenMower had stopped ("os back error <why>"): schedule with its time
+const OS_GIVEN_UP = {
+  hold: "MowBite's schedule couldn't be held",
+  not_docked: "the mower wasn't ready in the dock",
+  stop: "something couldn't be stopped",
+  broker: "something else still answers on the mower's MQTT port",
+  registry: "OpenMower's version can't be downloaded right now, it would be needed for the way back",
+  keep: "OpenMower's data couldn't be kept first",
+  pull: "MowBite OS couldn't be downloaded",
+  files: 'this version of MowBite OS has no setup for this mower',
+  import: "this version of MowBite OS can't take over OpenMower's map",
+};
+// how the last one ended, like a part's result
+function osResult() {
+  const [state, a, b, c] = S('os').split(' ');
+  const ok = (text) => ({text, level: 'ok'});
+  const warn = (text) => ({text, level: 'warn'});
+  switch (state) {
+    case 'switched':
+      return ok(tr(b === 'kept' ? 'switched to MowBite OS, with its own data from before' : "switched to MowBite OS, it took over OpenMower's map and settings"));
+    case 'rolled_back':
+      return warn(tr("MowBite OS didn't run as it should: {why}. OpenMower runs again as before.", {why: OS_WHY[a] ? tr(OS_WHY[a]) : a || '?'}));
+    case 'back':
+      if (b !== 'map') return ok(tr('back on OpenMower, with its own map from before the switch'));
+      return c === 'lost' ? warn(tr("back on OpenMower with the map from MowBite OS, some areas couldn't be taken over")) : ok(tr('back on OpenMower, with the map from MowBite OS'));
+    case 'error':
+      if (a === 'schedule') return ok(tr('not done: the schedule starts the mower {when}, OpenMower is left alone until then', {when: when(b)}));
+      if (a === 'not_docked') return warn(tr("not done: the mower wasn't ready in the dock. Tap again when it's there."));
+      return {text: OS_ERRORS[a] ? tr(OS_ERRORS[a]) : tr('failed ({why})', {why: a || '?'}), level: a === 'back' || a === 'stop' ? 'error' : 'warn'};
+    default:
+      return null;
+  }
+}
+// for the top when it went wrong: OpenMower not back (red), MowBite OS that didn't run lately (yellow)
+function osTrouble() {
+  if (S('switch_os').startsWith('openmower ')) return {text: tr("OpenMower isn't back yet"), tone: 'bad'};
+  const at = Number(S('os_at'));
+  if (S('os').startsWith('rolled_back ') && at && now - at < DAYS3) return {text: tr("MowBite OS didn't run, OpenMower runs again"), tone: 'wait'};
+  return null;
+}
+// its part of OpenMower's card: offered or why not (only once its image is set), on it and the way back, stopped
+// halfway back, and how the last one ended
+function osPart() {
+  const [offer, a, b, c] = S('os_switch').split(' ');
+  const way = S('switch_os').split(' ')[0];
+  // (only once its image is set, or while OpenMower isn't back)
+  if (!st.conf.os && !way && !S('os_ran')) return null;
+  const [state, why] = S('os').split(' ');
+  const at = /^\d+$/.test(S('os_at')) ? Number(S('os_at')) : null;
+  // (on it: the line about it says when)
+  const last = !(offer === 'on' && state === 'switched') && lastLine(osResult(), at, 'os');
+  const go = (key, label, question, query) => h('div', {class: 'act'}, twoTaps(key, tr(label), tr(question), () => ask(query)));
+  let body = null;
+  if (way === 'openmower') {
+    body = [!(state === 'error' && (why === 'back' || why === 'stop')) && h('p', {class: 'error'}, tr("The way back to OpenMower stopped halfway, OpenMower doesn't run yet.")),
+      go('switch:openmower', 'Continue the way back', 'Really continue?', 'switch=openmower')];
+  } else if (offer === 'on') {
+    body = [dim(tr('MowBite OS runs the mower since {when}. OpenMower is stopped, its data stays as it was.', {when: when(a)})),
+      dim(tr('On the way back OpenMower gets the map from MowBite OS and is started and checked again. Only with the mower ready in the dock.')),
+      S('os_drop') && dim(tr("OpenMower's version is downloaded again, that needs the internet.")),
+      S('os_safety') === 'check_failed' && h('p', {class: 'warn'},
+        tr("A safety check in MowBite OS's setup failed, so it won't drive on its own. OpenMower doesn't know this check and will mow again without it.")),
+      go('switch:openmower', 'Back to OpenMower', 'Really go back?', 'switch=openmower')];
+  } else if (offer === 'yes') {
+    body = [dim(tr("MowBite OS can take OpenMower's place on this mower. OpenMower's data is kept and OpenMower stopped, then MowBite OS is started and checked. If it doesn't run as it should, OpenMower comes back as it was.")),
+      dim(tr(c === 'kept' ? "MowBite OS starts with its own map and settings from the last time it ran, not with OpenMower's current ones." : "MowBite OS takes over OpenMower's map and mower_params.yaml.")),
+      b === 'drop' && h('p', {class: 'warn'}, tr("There isn't room for both: OpenMower's version is deleted first and downloaded again on the way back (that needs the internet).")),
+      dim(Number(a) > 0 ? tr('Download: {size}. Only with the mower ready in the dock.', {size: mib(a)}) : tr('Only with the mower ready in the dock.')),
+      go('switch:os', 'Switch to MowBite OS', 'Really switch?', 'switch=os')];
+  } else if (offer === 'no') {
+    const not = a === 'room' ? tr("there isn't room enough even with OpenMower's version deleted (needs about {need}, {has} there)", {need: mib(b), has: mib(c)})
+      : OS_NOT[a] ? tr(OS_NOT[a]) : a || '?';
+    body = dim(tr("Switching to MowBite OS isn't possible right now: {why}.", {why: not}));
+  }
+  return h('div', {class: 'os'}, h('b', null, 'MowBite OS'), last, body, failedHere('os'));
+}
+
 function partCard(p) {
   const id = p.id;
+  const os = p.kind === 'openmower' && osRun();
+  if (os) return osRunCard(os);
   const run = runOf(id);
   if (run) return runCard(p, run, failedHere(id));
   const fixed = p.kind === 'local' || p.kind === 'os';
+  // (left alone next to MowBite OS: nothing to update or put back until OpenMower is back)
+  const parked = osParked(p);
   const auto = autoOn(id);
   const stable = S(id + '_stable');
   const [state] = S(id).split(' ');
@@ -1171,7 +1496,7 @@ function partCard(p) {
   }
   // the way back: out in the card a few days after an update, else folded. not after it went back already, a tap would go
   // one more version back
-  const back = S(id + '_back') === 'yes' && (p.kind === 'image' || p.kind === 'openmower') &&
+  const back = S(id + '_back') === 'yes' && (p.kind === 'image' || p.kind === 'openmower') && !parked &&
     h('div', {class: 'row'}, dim(tr('Something wrong since the last update?')),
       twoTaps('back:' + id, tr('Back to the version before'), tr('Really go back?'), () => ask('back=' + id)));
   const backOut = back && state === 'updated' && at !== null && now - at < DAYS3;
@@ -1212,15 +1537,17 @@ function partCard(p) {
     p.kind === 'image' && avail(id) === 'local' && dim(tr("This version was built on its own, it isn't the official one.")),
     p.kind === 'local' && dim(tr('Built from a local copy, it is left as it is.')),
     p.gate === 'none' && dim(tr('Updates also with the mower out of the dock.')),
+    parked && p.kind !== 'openmower' && S(id) !== 'error os' && dim(tr('Stopped with OpenMower, it starts again once OpenMower is back.')),
     actButton(p),
     backOut && back,
     !fixed && h('label', {class: 'check'},
       h('input', {type: 'checkbox', 'data-key': 'auto:' + id, checked: auto, onchange: (e) => setConf({[id + '_auto']: e.target.checked ? 1 : 0})}),
       tr('Automatically at night ({when})', {when: tickText()})),
     inside.length > 0 && more(id, label, inside),
-    kept.length > 0 && more('data:' + id, 'Data kept',
+    kept.length > 0 && !parked && more('data:' + id, 'Data kept',
       dim(tr("Before each update the updater keeps a copy of this part's data on the mower, the newest two. Putting one back stops it, keeps what it has now first and starts it again, only with the mower ready in the dock.")),
       kept),
+    p.kind === 'openmower' && osPart(),
   );
 }
 // the pieces of a copy of data in words
@@ -1362,7 +1689,9 @@ function scheduleCard() {
 let said = null;
 let saying = {text: '', bad: false};
 function overview() {
-  const news = ALL().filter((p) => ['yes', 'switch'].includes(avail(p.id)));
+  const news = ALL().filter((p) => ['yes', 'switch'].includes(avail(p.id)) && !osParked(p));
+  const switching = askedSince('switch:os') !== null || askedSince('switch:openmower') !== null;
+  const osBad = osTrouble();
   const checked = /^\d+$/.test(S('checked')) ? Number(S('checked')) : null;
   const look = looking();
   const room = askedSince('room') !== null ? 'room' : askedSince('free') !== null ? 'free' : null;
@@ -1389,9 +1718,10 @@ function overview() {
     text = tr('No connection to the updater');
     tone = 'wait';
     lines.push(dim(tr('Shown is how things were {t}.', {t: when(lastOk)})));
-  } else if (running() || one || all !== null || room) {
+  } else if (running() || one || all !== null || room || switching) {
     tone = 'run';
     if (running()) text = runText();
+    else if (switching) text = tr(osWay() === 'os' ? 'Switching to MowBite OS…' : 'Going back to OpenMower…');
     else if (one) text = one.back ? tr('{name} goes back to the version before…', {name: nameOf(one.p)}) : tr('Updating {name}…', {name: nameOf(one.p)});
     else if (room) text = stepLabel({step: room}) + '…';
     else text = tr('Updating right now…');
@@ -1405,6 +1735,10 @@ function overview() {
     text = tr('Looking for updates…');
     tone = 'run';
     lines.push(bar({part: '', step: 'look', pct: null, since: look}));
+  } else if (osBad) {
+    text = osBad.text;
+    tone = osBad.tone;
+    lines.push(dim(tr("More on OpenMower's card below.")));
   } else if (trouble) {
     const name = nameOf(trouble.p);
     text = trouble.tone === 'bad' ? tr('Something went wrong with the last update of {name}', {name}) : tr("The last update of {name} didn't start", {name});

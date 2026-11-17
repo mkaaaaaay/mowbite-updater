@@ -691,6 +691,20 @@ details[open] > summary::after {
   border-top: 1px solid var(--field-border);
 }
 
+/* MowBite OS on OpenMower's card, set apart like an item */
+.os {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--field-border);
+}
+
+.os > b {
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .itemName {
   font-size: 13px;
   overflow-wrap: anywhere;
