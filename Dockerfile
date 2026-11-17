@@ -5,7 +5,7 @@
 # for the mower anywhere
 FROM --platform=$BUILDPLATFORM alpine:3.24 AS tools
 ARG TARGETARCH
-RUN arch=$([ "$TARGETARCH" = arm64 ] && echo aarch64 || echo x86_64) && \
+RUN case $TARGETARCH in arm64) arch=aarch64 ;; amd64) arch=x86_64 ;; *) echo "no build for TARGETARCH '$TARGETARCH'" && exit 1 ;; esac && \
     apk add -q --root /x --arch "$arch" --initdb --no-scripts --no-cache \
       --keys-dir "/usr/share/apk/keys/$arch" --repositories-file /etc/apk/repositories busybox-extras mosquitto-clients && \
     mkdir /libs && for l in libmosquitto libcjson libssl libcrypto libcares; do cp -a /x/usr/lib/$l.so* /libs/ 2>/dev/null || true; done
