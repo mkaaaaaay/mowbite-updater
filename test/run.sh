@@ -155,7 +155,7 @@ cleanup() {
   [ -n "$gate" ] && kill "$gate" 2> /dev/null
   [ -n "$feed" ] && kill "$feed" 2> /dev/null
   # (its folder in the stack is root's, the updater runs as root)
-  [ -z "${MBT_WORK:-}" ] && docker run --rm --label "mbt.run=$P" -v "$WORK:/work" busybox:1.37-musl rm -rf /work/stacks > /dev/null 2>&1
+  [ -z "${MBT_WORK:-}" ] && docker run --rm --label "mbt.run=$P" -v "$WORK:/work" busybox:1.37-musl rm -rf /work/stacks /work/osdata > /dev/null 2>&1
   [ -z "${MBT_WORK:-}" ] && rm -rf "$WORK"
 }
 
@@ -348,6 +348,9 @@ services:
       UPDATER_SELF: $P-updater-self
       UPDATER_HOLD_WAIT: "2"
       UPDATER_CALIB_WAIT: "20"
+      UPDATER_OS_WAIT: "90"
+      UPDATER_OS_CALM: "8"
+      MOWBITE_OS_REPO: $REG/$P-os
       OPENMOWER_CONTAINER: $P-om
       OM_RELEASES: http://127.0.0.1:$FEED/releases.atom
       PLANNER_GITHUB: http://127.0.0.1:$FEED/gh
@@ -1568,6 +1571,178 @@ post "restart=$P-talk" > /dev/null
 until_true "s.get('restarted', '').startswith('$P-talk refused') and s.get('restarted', '').endswith('stopped')" 60 &&
   [ "$(docker inspect -f '{{.State.Running}}' "$P-talk")" = false ] && ok "a stopped container isn't started" ||
   bad "the stopped one: $(val "s.get('restarted')"), running $(docker inspect -f '{{.State.Running}}' "$P-talk")"
+
+say "MowBite OS instead of OpenMower"
+# (OpenMower's broker and its publisher in its stack, as on a mower: they stop with it)
+docker rm -f "$P-broker" "$P-pub" > /dev/null 2>&1
+cat >> "$STACKS/om/compose.yaml" << EOF
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: $P-broker
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      - 127.0.0.1:$MQTT:1883
+    command: mosquitto -c /mosquitto-no-auth.conf
+    labels:
+      mbt.run: $P
+  pub:
+    image: eclipse-mosquitto:2
+    container_name: $P-pub
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - $WORK/state:/state:ro
+    command: ["sh", "-c", "while :; do mosquitto_pub -h 127.0.0.1 -p $MQTT -t robot_state/json -f /state/robot_state.json; sleep 1; done"]
+    labels:
+      mbt.run: $P
+EOF
+docker compose -f "$STACKS/om/compose.yaml" up -d --no-deps mosquitto pub > /dev/null 2>&1 || bad "OpenMower's broker doesn't come up in its stack"
+# the OS: healthy (MOWBITE_OS_HALT in its health's log and its own with state/os-halt: the next start in the same
+# container keeps that log), its robot_state and system.info on its own
+# broker, what it was given to import in its data_dir, its map exported (state/os-export: busy or fail). its stack's
+# broker from the registry only
+dir=$WORK/img/os
+mkdir -p "$dir"
+cat > "$dir/os.sh" << 'EOF'
+#!/bin/sh
+if [ -e /state/os-halt ]; then echo "MOWBITE_OS_HALT the board"; else { echo "$DATUM"; ls /import/openmower/ros /import/openmower/params; } > "$MOWBITE_DATA_DIR/imported"; fi
+while :; do
+  mosquitto_sub -h 127.0.0.1 -p "$MQTT_PORT" -t rpc/request | while read -r l; do
+    id=$(printf '%s' "$l" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+    mosquitto_pub -h 127.0.0.1 -p "$MQTT_PORT" -t rpc/response -m "{\"jsonrpc\":\"2.0\",\"result\":{\"name\":\"mowbite-os\",\"platform\":\"nx60i\"},\"id\":\"$id\"}"
+  done
+  sleep 1
+done &
+while :; do
+  if [ -e /state/os-out ]; then s='"MOWING","is_charging":0'; else s='"IDLE","is_charging":1'; fi
+  mosquitto_pub -h 127.0.0.1 -p "$MQTT_PORT" -t robot_state/json -m "{\"current_state\":$s,\"emergency_reason\":0}"
+  sleep 1
+done
+EOF
+cat > "$dir/migrate" << 'EOF'
+#!/bin/sh
+case $(cat /state/os-export 2> /dev/null) in
+busy) exit 2 ;;
+fail) exit 1 ;;
+esac
+echo '{"areas":["front","os"]}' > "$2/map.json" && echo '{"lost":[]}' > "$2/report.json"
+EOF
+cat > "$dir/nx60i.compose.yaml" << EOF
+name: $P-os
+services:
+  mosquitto:
+    image: $REG/$P-mosquitto:os
+    container_name: $P-osmqtt
+    restart: unless-stopped
+    network_mode: host
+    labels:
+      - mowbite.os=true
+      - mbt.run=$P
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+  os:
+    profiles: ["os"]
+    image: $REG/$P-os:\${MOWBITE_OS_TAG:?}
+    container_name: $P-os
+    restart: unless-stopped
+    network_mode: host
+    init: true
+    labels:
+      - mowbite.os=true
+      - mbt.run=$P
+    volumes:
+      - \${MOWBITE_DATA_DIR:?}:\${MOWBITE_DATA_DIR}
+      - \${MOWBITE_IMPORT_ROS:?}:/import/openmower/ros:ro
+      - \${MOWBITE_IMPORT_PARAMS:?}:/import/openmower/params:ro
+      - ./export:/export
+      - $WORK/state:/state:ro
+    environment:
+      - MQTT_PORT=$MQTT
+      - MOWBITE_DATA_DIR=\${MOWBITE_DATA_DIR}
+      - DATUM=\${MOWBITE_DATUM_LAT:?} \${MOWBITE_DATUM_LONG:?} \${MOWBITE_DATUM_HEIGHT:?}
+EOF
+printf 'listener %s 127.0.0.1\nallow_anonymous true\npersistence false\n' "$MQTT" > "$dir/mosquitto.conf"
+printf '# made-up\nMOWBITE_OS_TAG=\nMOWBITE_DATUM_LAT=\nMOWBITE_DATUM_LONG=\nMOWBITE_DATUM_HEIGHT=\nMOWBITE_DATA_DIR=%s\n' "$WORK/osdata" > "$dir/env.example"
+{
+  echo 'FROM eclipse-mosquitto:2'
+  echo "LABEL mbt.run=$P"
+  echo 'COPY --chmod=755 os.sh /os.sh'
+  echo 'COPY --chmod=755 migrate /usr/local/bin/mowbite-migrate'
+  echo 'COPY nx60i.compose.yaml mosquitto.conf env.example /usr/share/mowbite-os/mower/'
+  echo "HEALTHCHECK --interval=2s --timeout=2s --retries=2 CMD sh -c '[ ! -e /state/os-halt ] || echo MOWBITE_OS_HALT the board'"
+  echo 'ENTRYPOINT []'
+  echo 'CMD ["/os.sh"]'
+} > "$dir/Dockerfile"
+docker build -q -t "$REG/$P-os:t1" "$dir" > /dev/null && docker push -q "$REG/$P-os:t1" > /dev/null && forget os:t1 &&
+  docker tag eclipse-mosquitto:2 "$REG/$P-mosquitto:os" && docker push -q "$REG/$P-mosquitto:os" > /dev/null && forget mosquitto:os ||
+  bad "the OS's test image doesn't build"
+om_ran=$(docker inspect -f '{{.Image}}' "$P-om")
+map_perm=$(perm "$WORK/ros/map.json")
+# OpenMower's containers, whether they run and their restart policies; the offer looked at from now
+om_boxes() { docker inspect -f '{{.Name}}:{{.State.Running}}:{{.HostConfig.RestartPolicy.Name}}' "$P-om" "$P-broker" "$P-pub" "$P-mowbite" "$P-planner" 2> /dev/null; }
+os_boxes() { docker ps -a --filter "label=mbt.run=$P" --format '{{.Names}}:{{.State}}' | grep -E -- "-(om|broker|pub|mowbite|planner|os|osmqtt):" | tr '\n' ' '; }
+look_os() {
+  t=$(date +%s)
+  post check > /dev/null
+  until_true "int(s.get('checked', 0)) >= $t and not s.get('looking') and s.get('os_switch', '').$1" 120
+}
+was=$(om_boxes)
+mower docked
+post conf "os t1" > /dev/null
+look_os "startswith('no datum')" && ok "not offered without the datum of its map" ||
+  bad "without the datum: $(val "s.get('os_switch')")"
+sed -i '/^    gps:$/a\      datum_lat: 52.1\n      datum_long: 9.7\n      datum_height: 60.5' "$WORK/params/mower_params.yaml"
+look_os "endswith(' keep import')" && [ "$(val "s.get('os_switch', '').split(' ')[0]")" = yes ] &&
+  ok "offered next to OpenMower's image, to import its data" || bad "the offer: $(val "s.get('os_switch')")"
+
+# (a halt in its health's log: OpenMower back as it was, the OS stopped)
+: > "$WORK/state/os-halt"
+post switch=os > /dev/null
+until_true "s.get('os', '').startswith('rolled_back halt')" 300 && runs_on "$P-om" "$om_ran" && [ "$(om_boxes)" = "$was" ] &&
+  [ "$(docker inspect -f '{{.State.Running}}' "$P-os" 2> /dev/null)" = false ] &&
+  ok "a halt in its health: OpenMower's containers back as they were, the OS stopped" ||
+  bad "after a halt: $(val "s.get('os')"), $(os_boxes)"
+rm -f "$WORK/state/os-halt"
+look_os "endswith(' keep import')" && [ -d "$WORK/osdata" ] && ok "its data_dir empty: offered to import again" ||
+  bad "with its empty data_dir: $(val "s.get('os_switch')")"
+rmdir "$WORK/osdata"
+look_os "endswith(' keep import')" && ok "its data_dir not there: offered to import" || bad "without its data_dir: $(val "s.get('os_switch')")"
+
+post switch=os > /dev/null
+until_true "s.get('os', '').startswith('switched') and s.get('os', '').endswith(' import') and s.get('os_switch', '').startswith('on ')" 300 &&
+  ok "MowBite OS in OpenMower's place" || bad "the switch: $(val "s.get('os')"), $(val "s.get('os_switch')")"
+[ "$(docker inspect -f '{{.State.Running}}' "$P-os" "$P-osmqtt" | sort -u)" = true ] &&
+  [ "$(om_boxes | cut -d: -f2- | sort -u)" = false:no ] &&
+  ok "OpenMower, its broker, MowBite and the planner stopped, restart policies no" || bad "on the OS: $(os_boxes), $(om_boxes | tr '\n' ' ')"
+[ "$(stat -c %u:%g "$STACKS/mowbite-os/compose.yaml" "$STACKS/mowbite-os/.env" "$STACKS/mowbite-os/export" | sort -u)" = "$(stat -c %u:%g "$STACKS")" ] &&
+  grep -qx 'MOWBITE_OS_TAG=t1' "$STACKS/mowbite-os/.env" && grep -qx "MOWBITE_IMPORT_ROS=$WORK/ros" "$STACKS/mowbite-os/.env" &&
+  ok "its stack next to the others, with their owner" || bad "its stack: $(stat -c "%n %u:%g" "$STACKS/mowbite-os"/* "$STACKS/mowbite-os/.env" | tr "\n" " ")"
+[ "$(head -n1 "$WORK/osdata/imported" 2> /dev/null)" = "52.1 9.7 60.5" ] && grep -qx map.json "$WORK/osdata/imported" &&
+  grep -qx mower_params.yaml "$WORK/osdata/imported" && ok "it got the datum, OpenMower's map and mower_params.yaml" ||
+  bad "what it got: $(tr '\n' ' ' < "$WORK/osdata/imported" 2> /dev/null)"
+post "back=openmower" > /dev/null
+until_true "s.get('openmower', '') == 'error os'" 60 && [ "$(docker inspect -f '{{.State.Running}}' "$P-om")" = false ] &&
+  ok "OpenMower left alone meanwhile" || bad "OpenMower on the OS: $(val "s.get('openmower')")"
+[ "$(post switch=os)" != ok ] || bad "a second switch to the OS taken"
+
+# (back with the OS's map: OpenMower's map.json from its export with its owner and rights)
+touch "$WORK/state/os-out"
+sleep 2
+post switch=openmower > /dev/null
+until_true "s.get('os', '').startswith('error not_docked')" 120 && [ "$(docker inspect -f '{{.State.Running}}' "$P-os")" = true ] &&
+  ok "not back while the mower isn't idle in the dock" || bad "back out of the dock: $(val "s.get('os')")"
+rm -f "$WORK/state/os-out"
+sleep 2
+post switch=openmower > /dev/null
+until_true "s.get('os', '').startswith('back ') and s.get('os', '').endswith(' map')" 300 && runs_on "$P-om" "$om_ran" &&
+  ok "back on OpenMower with the OS's map" || bad "back: $(val "s.get('os')")"
+[ "$(om_boxes)" = "$was" ] && [ "$(docker inspect -f '{{.State.Running}}' "$P-os" "$P-osmqtt" | sort -u)" = false ] &&
+  ok "OpenMower's containers as they were, the OS stopped" || bad "after the way back: $(os_boxes)"
+[ "$(cat "$WORK/ros/map.json")" = '{"areas":["front","os"]}' ] && [ "$(perm "$WORK/ros/map.json")" = "$map_perm" ] &&
+  ok "its map.json from the OS, owner and rights as they were" || bad "its map.json: $(cat "$WORK/ros/map.json") $(perm "$WORK/ros/map.json")"
+look_os "endswith(' keep kept')" && ok "offered again, with the OS's data from before" ||
+  bad "the offer afterwards: $(val "s.get('os_switch')")"
 
 say "done"
 finished=1

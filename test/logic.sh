@@ -1075,8 +1075,13 @@ r/pl:edge sha256:pl -
 eclipse-mosquitto:2 sha256:mq -
 eclipse-mosquitto:2.0.22 sha256:mq2 -
 r/mowbite:latest sha256:mb r/mowbite@sha256:dmb'
-TARGETS='        target: /import/openmower/ros
+TARGETS='      - type: bind
+        target: /import/openmower/ros
+        read_only: true
+      - type: bind
         target: /import/openmower/params
+        read_only: true
+      - type: bind
         target: /export'
 os_fresh() {
   fresh
@@ -1119,6 +1124,7 @@ want_of() { echo "$C1 v1.0.0 release"; }
 calib_run() { [ "$1" = read ] && cat /fake/datum; }
 os_kept() { [ -e /fake/os_kept ]; }
 os_info() { [ ! -e /fake/no_info ]; }
+os_rpc() { [ "$1" = setup.get ] && cat /fake/os_setup 2> /dev/null; }
 sleep() { :; }
 # (docker here is partly a function)
 timeout() {
@@ -1145,7 +1151,7 @@ mqtt() {
 }
 seen() {
   echo "seen $1 $2" >> /fake/calls
-  [ ! -e /fake/om_nostart ] && running "$(box "$1")"
+  [ ! -e /fake/om_nostart ] && [ ! -e "/fake/nostart_$1" ] && running "$(box "$1")"
 }
 start_part() { echo "start $1" >> /fake/calls; echo running > "/fake/c/$(box "$1")/status"; }
 build_image() {
@@ -1244,7 +1250,7 @@ docker() {
 }
 policies() { for c in om omq pl mb; do printf '%s:%s:%s ' "$c" "$(cat "/fake/c/$c/policy" 2> /dev/null)" "$(cat "/fake/c/$c/status" 2> /dev/null)"; done; }
 on_om() { [ "$(policies)" = "om:unless-stopped:running omq:unless-stopped:running pl:unless-stopped:running mb:unless-stopped:running " ]; }
-no_notes() { ! grep -qE '^(switch_os|os_ran|os_drop|os_image|os_env|os_data|gone_[a-z_]*) ' /st/status; }
+no_notes() { ! grep -qE '^(switch_os|os_ran|os_drop|os_image|os_env|os_data|os_safety|gone_[a-z_]*) ' /st/status; }
 first() { grep -n -- "$1" /fake/calls | head -n1 | cut -d: -f1; }
 last() { grep -n -- "$1" /fake/calls | tail -n1 | cut -d: -f1; }
 
@@ -1279,7 +1285,7 @@ os_look
 echo r/om@sha256:dom > /fake/reg_gone
 os_look
 [ "$(get os_switch)" = "no prev" ] || bad "os: OpenMower deleted though its registry hasn't it: $(get os_switch)"
-for w in datum data registry image import files openmower pending stack; do
+for w in datum data registry image import writable files openmower pending stack; do
   os_fresh
   case $w in
   datum) echo 'll/services/gps/datum_long 9.2' > /fake/datum ;;
@@ -1287,12 +1293,14 @@ for w in datum data registry image import files openmower pending stack; do
   registry) os_away && : > /fake/reg_down ;;
   image) os_away && echo r/os:t1 > /fake/reg_gone ;;
   import) sed -i '/export/d' /fake/os_targets ;;
+  writable) sed -i '3d' /fake/os_targets ;;
   files) rm /fake/osimg/mosquitto.conf ;;
   openmower) echo exited > /fake/c/om/status ;;
   pending) status pending_mowbite x ;;
   stack) mkdir /stacks/mowbite-os ;;
   esac
   os_look
+  case $w in writable) w=import ;; esac
   [ "$(get os_switch)" = "no $w" ] || bad "os: $w not said: $(get os_switch)"
   echo 'listener 1883' > /fake/osimg/mosquitto.conf
 done
@@ -1323,6 +1331,7 @@ alone os os_switch os
 [ "$(policies)" = "om:no:exited omq:no:exited pl:no:exited mb:no:exited " ] || bad "os: OpenMower's world not stopped: $(policies)"
 [ "$(get os_ran)" = "om:unless-stopped:running omq:unless-stopped:running pl:unless-stopped:running mb:unless-stopped:running" ] || bad "os: not noted: $(get os_ran)"
 running mowbite-os && running mowbite-mosquitto && [ "$(get os_stack)" = mbt-os ] || bad "os: its stack not started"
+called 'os_compose.* up .*--force-recreate' || bad "os: its containers not made anew, an old halt would count"
 [ "$(first '^pull r/os:t1')" -lt "$(first '^stop')" ] && [ "$(last '^stop om$')" -lt "$(first '^stop omq')" ] && [ "$(first '^stop omq')" -lt "$(first 'os_compose.* up ')" ] ||
   bad "os: not in its order: $(grep '^pull\|^stop\|up -d' /fake/calls | tr '\n' '|')"
 grep -qx 'MOWBITE_OS_TAG=t1' /stacks/mowbite-os/.env && grep -qx 'MOWBITE_DATUM_LAT=53.1' /stacks/mowbite-os/.env && grep -qx 'MOWBITE_DATUM_LONG=9.2' /stacks/mowbite-os/.env &&
@@ -1337,6 +1346,20 @@ run request openmower mowbite planner
 [ "$(get openmower)" = "error os" ] && [ "$(get mowbite)" = "error os" ] && [ "$(get planner)" = "error os" ] && ! called '^start\|^restart\|^pull\|^compose' ||
   bad "os: a part updated next to the OS: $(get openmower), $(get mowbite), $(get planner)"
 [ -z "$(gone_due)" ] || bad "os: a build due next to the OS"
+(
+  os_ref() { return 1; }
+  os_look
+)
+[ "$(get os_switch | cut -d' ' -f1)" = on ] || bad "os: its setting gone on the OS took the way back: $(get os_switch)"
+# a safety check of its setup failed: said for the way back's warning, as long as it stands
+echo '{"jsonrpc":"2.0","result":{"step":null,"safety":{"open":false,"why":"CHECK_FAILED"}},"id":"x"}' > /fake/os_setup
+os_look
+[ "$(get os_safety)" = check_failed ] || bad "os: a failed check of its setup not said: $(get os_safety)"
+echo '{"jsonrpc":"2.0","result":{"step":null,"safety":{"open":true,"why":null}},"id":"x"}' > /fake/os_setup
+os_look
+[ -z "$(get os_safety)" ] || bad "os: a failed check said after it passed: $(get os_safety)"
+echo '{"jsonrpc":"2.0","result":{"safety":{"open":false,"why":"CHECK_FAILED"}},"id":"x"}' > /fake/os_setup
+os_look
 # back: the OS's map into OpenMower's map.json with its owner and rights, OpenMower's world as it was
 cp -p /st/status /fake/on_os
 cp -rp /stacks /fake/on_os_stacks
@@ -1353,17 +1376,25 @@ alone os os_switch openmower
 [ "$(first '^start omq')" -lt "$(first '^start om$')" ] && [ "$(first '^hold')" -lt "$(first '^start om$')" ] || bad "os: OpenMower before its broker or unheld"
 [ "$(data_dirs openmower | wc -l)" -ge 2 ] || bad "os: what OpenMower had not kept before the map came"
 # lost, busy, an export that fails
-for w in lost busy failed gone; do
+for w in lost busy failed gone out; do
   cp -p /fake/on_os /st/status
   rm -rf /stacks && cp -rp /fake/on_os_stacks /stacks
   for c in om omq pl mb; do echo no > "/fake/c/$c/policy"; echo exited > "/fake/c/$c/status"; done
   for c in mowbite-os mowbite-mosquitto; do echo running > "/fake/c/$c/status"; done
   echo '{"areas":["front"]}' > /vol/ros/map.json
   echo '{"lost": [{"kind": "drawn"}]}' > /fake/os_report
-  case $w in lost) echo 0 > /fake/export ;; busy) echo 2 > /fake/export ;; failed) echo 1 > /fake/export ;; gone) echo exited > /fake/c/mowbite-os/status ;; esac
+  case $w in
+  lost) echo 0 > /fake/export ;;
+  busy) echo 2 > /fake/export ;;
+  failed) echo 1 > /fake/export ;;
+  gone) echo exited > /fake/c/mowbite-os/status && echo "0 unknown" > /fake/mower ;;
+  out) echo "0 MOWING" > /fake/mower ;;
+  esac
   alone os os_switch openmower
+  echo 1 > /fake/mower
   case $w in
   lost) [ "$(get os | cut -d' ' -f1,3-)" = "back map lost" ] && on_om || bad "os: lost not said: $(get os)" ;;
+  out) [ "$(get os)" = "error not_docked" ] && running mowbite-os && [ -z "$(get switch_os)" ] || bad "os: back while it drives: $(get os)" ;;
   busy) [ "$(get os)" = "error busy" ] && running mowbite-os && [ -n "$(get os_ran)" ] && [ -z "$(get switch_os)" ] || bad "os: busy, but: $(get os)" ;;
   *)
     [ "$(get os | cut -d' ' -f1,3-)" = "back old" ] && on_om && [ "$(cat /vol/ros/map.json)" = '{"areas":["front"]}' ] ||
@@ -1414,6 +1445,40 @@ for w in health halt info emergency calm pull up broker not_docked schedule stop
   echo 1 > /fake/mower
 done
 
+# a planner built on OpenMower's version before stops with it too
+os_fresh
+os_away
+(
+  base_of() { [ "$1" = pl ] && echo r/om:before; }
+  alone os os_switch os
+)
+[ "$(get os | cut -d' ' -f1)" = switched ] && [ "$(cat /fake/c/pl/status)" = exited ] || bad "os: a planner on OpenMower's version before left running: $(get os), $(policies)"
+
+# given up and OpenMower not back: a tap goes on from where it got to, its broker running already
+os_fresh
+os_away
+echo unhealthy > /fake/os_health
+: > /fake/om_nostart
+alone os os_switch os
+rm -f /fake/om_nostart /fake/os_health
+[ "$(get os)" = "error back" ] && [ "$(get switch_os)" = "openmower start old" ] && running omq && [ -z "$(get os_switch)" ] ||
+  bad "os: given up, OpenMower not back, but: $(get os), $(get switch_os), offer $(get os_switch)"
+alone os os_switch openmower
+[ "$(get os | cut -d' ' -f1,3-)" = "back old" ] && on_om && no_notes || bad "os: the tap after a way there given up didn't go on: $(get os), $(get switch_os)"
+
+# stopped while it went back: back on from there, not on to the OS
+os_fresh
+os_away
+echo unhealthy > /fake/os_health
+(
+  os_om_up() { exit 0; }
+  alone os os_switch os
+)
+rm -f /fake/os_health
+[ "$(get switch_os)" = "os back rolled_back health" ] || bad "os: going back not noted: $(get switch_os)"
+alone os os_resume
+[ "$(get os)" = "rolled_back health" ] && on_om && no_notes && ! running mowbite-os || bad "os: not back on after a stop going back: $(get os), $(policies)"
+
 # with OpenMower deleted first: its containers removed, its image and what's built on it deleted, back from its registry
 os_fresh
 os_away
@@ -1427,13 +1492,47 @@ alone os os_switch os
 echo 0 > /fake/export
 echo '{"areas":["os"]}' > /fake/os_map
 echo '{"lost": []}' > /fake/os_report
+echo r/om@sha256:dom > /fake/reg_gone
+alone os os_switch openmower
+rm /fake/reg_gone
+[ "$(get os)" = "error registry" ] && running mowbite-os && [ -z "$(get switch_os)" ] || bad "os: back without OpenMower in its registry: $(get os)"
+echo 0 > /fake/export
+echo '{"areas":["os"]}' > /fake/os_map
+echo '{"lost": []}' > /fake/os_report
 : > /fake/calls
 alone os os_switch openmower
 [ "$(get os | cut -d' ' -f1,3-)" = "back map" ] && running om && running pl && running omq && running mb && no_notes ||
   bad "os: not back with OpenMower from its registry: $(get os), $(policies)"
+[ "$(first '^rmi r/os:t1')" -lt "$(first '^pull r/om@sha256:dom')" ] || bad "os: OpenMower downloaded next to the OS's image: $(grep '^rmi\|^pull' /fake/calls | tr '\n' '|')"
 [ "$(first '^pull r/om@sha256:dom')" -lt "$(first 'compose om .*--no-start')" ] && [ "$(cat /vol/ros/map.json)" = '{"areas":["os"]}' ] ||
   bad "os: OpenMower not made again with the OS's map: $(grep '^pull\|compose' /fake/calls | tr '\n' '|')"
 [ "$(first '^build pl')" -lt "$(first '^start om$')" ] || bad "os: the planner not built before OpenMower"
+# a planner that doesn't run on OpenMower made again: removed again, its note kept
+os_fresh
+os_away
+echo 1000 > /fake/free
+echo 'sha256:om 5.8GB' > /fake/sizes
+alone os os_switch os
+echo 0 > /fake/export
+echo '{"areas":["os"]}' > /fake/os_map
+echo '{"lost": []}' > /fake/os_report
+: > /fake/nostart_planner
+alone os os_switch openmower
+rm -f /fake/nostart_planner
+[ "$(get os | cut -d' ' -f1)" = back ] && running om && [ "$(get planner)" = "error gone" ] && [ ! -e /fake/c/pl ] && [ -n "$(get gone_planner)" ] ||
+  bad "os: a planner that doesn't run after the way back: $(get os), planner $(get planner), $(policies)"
+# given up before anything was deleted: the planner as it was, not taken as built again
+os_fresh
+os_away
+echo 1000 > /fake/free
+echo 'sha256:om 5.8GB' > /fake/sizes
+: > /fake/stop_fail
+(
+  build_done() { : > /fake/built; }
+  alone os os_switch os
+)
+rm /fake/stop_fail
+[ "$(get os)" = "error stop" ] && on_om && no_notes && [ -z "$(get planner)" ] && [ ! -e /fake/built ] || bad "os: given up before the delete, but: $(get os), planner $(get planner), $(policies)"
 # a pull that fails once OpenMower is deleted: OpenMower back from its registry
 os_fresh
 os_away

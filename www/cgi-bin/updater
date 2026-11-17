@@ -132,7 +132,7 @@ GET)
   fi
   printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
   # the settings: each part's channel and whether it updates by itself, when
-  printf '{"conf":{"at":"%s","days":"%s","picked":"%s"' "$(conf at 03:00 | jstr)" "$(conf days daily | jstr)" "$(conf picked none | jstr)"
+  printf '{"conf":{"at":"%s","days":"%s","picked":"%s","os":"%s"' "$(conf at 03:00 | jstr)" "$(conf days daily | jstr)" "$(conf picked none | jstr)" "$(conf os "" | jstr)"
   for id in $(part_ids); do
     if [ "$id" = openmower ]; then ch=$(om_channel); else ch=$(channel "$id"); fi
     printf ',"%s":"%s","%s_auto":%s' "$id" "$(echo "$ch" | jstr)" "$id" "$(conf "${id}_auto" 0 | grep -x '[01]' || echo 0)"
