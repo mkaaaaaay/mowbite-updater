@@ -149,6 +149,8 @@ digests_in() { digests "$1" | tr ' ' '\n' | awk -F@ -v r="$2" '$1 == r {printf "
 #   build      a container built from a github context: built again when that moved or its base image changed
 part_line() { get parts | tr ' ' '\n' | grep "^$1:"; }
 box() { part_line "$1" | cut -d: -f2; }
+# the build part that runs as container $1
+build_of() { get parts | tr ' ' '\n' | awk -F: -v c="$1" '$2 == c && $3 == "build" {print $1; exit}'; }
 kind() { part_line "$1" | cut -d: -f3; }
 part_ids() { get parts | tr ' ' '\n' | cut -d: -f1 | grep .; }
 

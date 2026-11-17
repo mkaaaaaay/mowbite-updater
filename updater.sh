@@ -362,7 +362,7 @@ find_parts() {
   # (one removed for OpenMower's update without a copy that's there again: its note goes, not while they're removed, nor
   # on the way to MowBite OS or back)
   case $(get nokeep_openmower):$(get switch_os) in
-  rm\ *:* | *:os\ * | *:openmower\ *) ;;
+  rm\ *:* | *:?*) ;;
   *) gone_list | while read -r x c; do exists "$c" && status "$x"; done ;;
   esac
   # (left by a stop right before such an update started)
@@ -851,6 +851,9 @@ layers() {
       if (match($0, /"size" *: *[0-9]+/)) { s = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); print substr(d, 1, 12), s }
     }'
 }
+# MB the layers of file $1 take packed and what pulling them needs: x5 and 1 GB more
+layers_mb() { awk '{s += $2} END {printf "%d\n", s / 1048576}' "$1"; }
+pull_mb() { awk '{s += $2} END {printf "%d\n", s * 5 / 1048576 + 1024}' "$1"; }
 
 # the layers of the newest image of ref for this machine as docker keeps them (its diff ids), one a line. (an image for
 # one platform only has no list of platforms to pick from)
@@ -1656,14 +1659,14 @@ nokeep_look() {
   has=$(free_mb)
   has=$((${has:-0} + $(sed -n 's/^cache //p' "$STATE/room" 2>/dev/null | grep -x '[0-9][0-9]*' || echo 0) / 1048576))
   [ -z "$only" ] || has=$((has + $(image_bytes "$before") / 1048576))
-  need=$(awk '{s += $2} END {printf "%d\n", s * 5 / 1048576 + 1024}' "$STATE/layers")
+  need=$(pull_mb "$STATE/layers")
   if [ -z "$only" ] || [ "$has" -lt "$need" ]; then status openmower_nokeep no room "$need" "$has"; return 1; fi
   nk_holders=$(holders_of "$only")
   if ! printf '%s\n' "$nk_holders" | grep -qxF -- "$before"; then status openmower_nokeep no holders; return 1; fi
   [ "$target" != "$ref" ] || back=$ref
   for c in $(boxes_on "$nk_holders"); do
     [ "$c" != "$OM" ] || continue
-    p=$(get parts | tr ' ' '\n' | awk -F: -v c="$c" '$2 == c && $3 == "build" {print $1; exit}')
+    p=$(build_of "$c")
     if [ -z "$p" ] || [ "$(base_of "$c")" != "$ref" ]; then status openmower_nokeep no box "$c"; return 1; fi
     # (built again on the new version only when that comes under the same tag)
     [ "$target" = "$ref" ] || { status openmower_nokeep no base "$p"; return 1; }
@@ -1674,7 +1677,7 @@ nokeep_look() {
     back="$back,$(ref_of "$c")"
   done
   all=$(for c in $nk_holders; do tags_of "$c"; done | tr ' ' '\n' | grep . | sort -u)
-  status openmower_nokeep yes "$(awk '{s += $2} END {printf "%d\n", s / 1048576}' "$STATE/layers")" \
+  status openmower_nokeep yes "$(layers_mb "$STATE/layers")" \
     "$(printf '%s' "$nk_parts" | sed 's/^ //; s/ /,/g' | grep . || echo -)" "${back:--}" \
     "$(printf '%s\n' "$all" | awk -v k=",$back," 'NF && !index(k, "," $0 ",")' | tr '\n' ',' | sed 's/,$//' | grep . || echo -)"
 }
@@ -1845,13 +1848,14 @@ nokeep_undo() {
   nokeep_off
   unhold
 }
+# the build cache cleared (a test on a pc with builds of its own: PRUNE=0)
+prune_cache() { [ "${PRUNE:-1}" = 0 ] || timeout $T_UP docker builder prune -af > /dev/null 2>&1; }
 # what holds the layers of the version before deleted (twice: an image built on another goes only after it), the build
 # cache cleared
 nokeep_drop() {
   local i x
   for i in 1 2; do for x in $(get nokeep_holders); do drop_image "$x"; done; done
-  # (a test on a pc with builds of its own: PRUNE=0)
-  [ "${PRUNE:-1}" = 0 ] || timeout $T_UP docker builder prune -af > /dev/null 2>&1
+  prune_cache
   log "openmower: the version before deleted, $(free_mb) MB free"
   status nokeep_openmower new "$(get nokeep_openmower | cut -d' ' -f2-)"
   status nokeep_holders
@@ -2157,18 +2161,13 @@ os_kept() {
 # mower_params.yaml, kept: its data_dir has its own from before. for the way there os_way, os_need (MB free it needs),
 # os_new, os_env_now, os_prev, os_holders (what goes with drop), os_parts and os_wants (the builds on it)
 os_look() {
-  local ref img mb have x c p w
+  local ref img mb have x c p w ros params
   if os_busy; then
     os_safety
     return 1
   fi
   ref=$(os_ref) || { status os_switch; return 1; }
-  os_way=''
-  os_need=0
-  os_prev=''
-  os_holders=''
-  os_parts=''
-  os_wants=''
+  os_way='' os_need=0 os_prev='' os_holders='' os_parts='' os_wants=''
   if [ "$(kind openmower)" != openmower ] || ! running "$OM"; then status os_switch no openmower; return 1; fi
   if nokeep_busy; then status os_switch no nokeep; return 1; fi
   if grep -qE '^(pending_[a-z0-9_]+|gone_[a-z0-9_]+|data_put|calib_pending|openmower_missing) ' "$STATUS" 2> /dev/null; then
@@ -2180,9 +2179,10 @@ os_look() {
     status os_switch no stack
     return 1
   fi
-  if [ -z "$(os_src /data/ros)" ] || [ -z "$(os_src /data/params)" ]; then status os_switch no data; return 1; fi
+  ros=$(os_src /data/ros) params=$(os_src /data/params)
+  if [ -z "$ros" ] || [ -z "$params" ]; then status os_switch no data; return 1; fi
   x=$(os_datum) || { status os_switch no datum; return 1; }
-  os_env_now="$x $(os_src /data/ros) $(os_src /data/params)"
+  os_env_now="$x $ros $params"
   if id_of "$ref" > /dev/null; then
     mb=0
     os_files "$ref" "$STATE/os.look" "$os_env_now"
@@ -2194,8 +2194,8 @@ os_look() {
     case $? in 0) ;; 1) status os_switch no image; return 1 ;; *) status os_switch no registry; return 1 ;; esac
     layers "$ref" > "$STATE/os.layers"
     [ -s "$STATE/os.layers" ] || { status os_switch no registry; return 1; }
-    mb=$(awk '{s += $2} END {printf "%d\n", s / 1048576}' "$STATE/os.layers")
-    os_need=$(awk '{s += $2} END {printf "%d\n", s * 5 / 1048576 + 1024}' "$STATE/os.layers")
+    mb=$(layers_mb "$STATE/os.layers")
+    os_need=$(pull_mb "$STATE/os.layers")
   fi
   # (what's free, the build cache and the images nothing needs, as check_room listed them)
   have=$(free_mb)
@@ -2211,7 +2211,7 @@ os_look() {
     os_holders=$(holders_of "$(docker image inspect -f '{{range .RootFS.Layers}}{{.}} {{end}}' "$img" 2> /dev/null)")
     for c in $(boxes_on "$os_holders"); do
       [ "$c" != "$OM" ] || continue
-      p=$(get parts | tr ' ' '\n' | awk -F: -v c="$c" '$2 == c && $3 == "build" {print $1; exit}')
+      p=$(build_of "$c")
       [ -n "$p" ] && [ "$(base_of "$c")" = "$(ref_of "$OM")" ] && w=$(rebuild_want "$p") || { status os_switch no prev; return 1; }
       os_parts="$os_parts $p"
       os_wants="$os_wants$p $w
@@ -2389,7 +2389,7 @@ os_pull() {
 os_clear() {
   local id refs r
   check_room
-  [ "${PRUNE:-1}" = 0 ] || timeout $T_UP docker builder prune -af > /dev/null 2>&1
+  prune_cache
   awk '$1 == "img" && ($5 == "dangling" || $5 == "unused") {print $2, $4}' "$STATE/room" | while read -r id refs; do
     if [ "$refs" = - ]; then
       docker rmi "$id" > /dev/null 2>&1

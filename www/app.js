@@ -910,12 +910,14 @@ function troubled() {
 
 // what it does right now, for the bar
 const STEPS = ['prepare', 'download', 'extract', 'build', 'restart', 'wait', 'back', 'data'];
-function progressNow() {
-  if (!running()) return null;
+function progressOf() {
   const [part, step, pct, since, done, of] = S('progress').split(' ');
-  if (!STEPS.includes(step)) return null;
   const n = (x) => (/^\d+$/.test(x || '') ? Number(x) : undefined);
-  return {part, step, pct: n(pct) === undefined ? null : Math.min(100, n(pct)), since: n(since) || 0, done: n(done), of: n(of)};
+  return {part, step, pct: n(pct) === undefined ? null : Math.min(100, n(pct)), since: n(since), done: n(done), of: n(of)};
+}
+function progressNow() {
+  const p = running() ? progressOf() : null;
+  return p && STEPS.includes(p.step) ? {...p, since: p.since || 0} : null;
 }
 const runParts = () => (running() ? S('run_parts').split(' ').filter(Boolean) : []);
 // each part's step before the one it's on: back right after its restart is a new version that didn't run
@@ -1281,11 +1283,12 @@ const osUndo = () => S('switch_os').startsWith('os back ');
 // a part left alone next to MowBite OS: OpenMower, what was stopped or deleted with it
 const osParked = (p) => osBusy() && (p.kind === 'openmower' || S('os_ran').split(' ').some((x) => x.startsWith(p.container + ':')) || !!S('gone_' + p.id));
 // which way it goes while it's asked for or runs: 'os' there, 'openmower' back
+const osTap = () => (askedSince('switch:os') !== null ? askedSince('switch:os') : askedSince('switch:openmower'));
 function osWay() {
   if (askedSince('switch:os') !== null) return 'os';
   if (askedSince('switch:openmower') !== null) return 'openmower';
   const way = S('switch_os').split(' ')[0];
-  if (way) return way === 'os' ? 'os' : 'openmower';
+  if (way) return way;
   return running() && runParts().includes('os') ? (S('os_switch').startsWith('on ') ? 'openmower' : 'os') : null;
 }
 // each step on the way, while it's on it and once it's done
@@ -1309,7 +1312,7 @@ const OS_BACK = {
 function osRun() {
   const [way, step, how] = S('switch_os').split(' ');
   const on = running() && runParts().includes('os');
-  const tap = askedSince('switch:os') !== null ? askedSince('switch:os') : askedSince('switch:openmower');
+  const tap = osTap();
   const go = osWay();
   if (!go || !(on || tap !== null || way === 'os')) return null;
   const drop = !!S('os_drop') || S('os_switch').split(' ')[2] === 'drop';
@@ -1317,23 +1320,22 @@ function osRun() {
     : ['export', 'stop', ...(S('os_drop') ? ['om'] : []), 'data', 'start'];
   const at = way ? step : steps[0];
   if (!steps.includes(at)) steps.push(at);
-  const [part, pstep, pct, since, done, of] = S('progress').split(' ');
-  const n = (x) => (/^\d+$/.test(x || '') ? Number(x) : undefined);
-  const mine = on && part === 'os';
-  const prog = {part: 'os', step: at, pstep: mine ? pstep : null, pct: mine && n(pct) !== undefined ? Math.min(100, n(pct)) : null,
-    since: (mine && n(since)) || tap, done: mine ? n(done) : undefined, of: mine ? n(of) : undefined};
+  const q = progressOf();
+  const mine = on && q.part === 'os';
+  const prog = {part: 'os', step: at, pstep: mine ? q.step : null, pct: mine ? q.pct : null,
+    since: (mine && q.since) || tap, done: mine ? q.done : undefined, of: mine ? q.of : undefined};
   return {go, steps, at: steps.indexOf(at), prog, old: how === 'old', undo: osUndo()};
 }
 function osRunCard(run) {
   const {go, steps, at, prog, old} = run;
   if (run.undo) {
-    const label = tr(prog.pstep === 'stop' ? 'Stopping MowBite OS' : ['download', 'extract'].includes(prog.pstep) ? 'Downloading OpenMower again' : 'Bringing OpenMower back');
+    const label = tr(prog.pstep === 'stop' ? OS_BACK.stop[0] : ['download', 'extract'].includes(prog.pstep) ? OS_BACK.om[0] : 'Bringing OpenMower back');
     // (switch_os "os back rolled_back|error <why>")
     const [, , kind, why, t] = S('switch_os').split(' ');
     const given = kind === 'rolled_back'
-      ? tr("MowBite OS didn't run as it should: {why}. OpenMower comes back as it was.", {why: OS_WHY[why] ? tr(OS_WHY[why]) : why || '?'})
+      ? tr("MowBite OS didn't run as it should: {why}. OpenMower comes back as it was.", {why: trWhy(OS_WHY, why)})
       : tr('The switch was given up: {why}. OpenMower comes back as it was.',
-        {why: why === 'schedule' ? tr('the schedule starts the mower {when}', {when: when(t)}) : OS_GIVEN_UP[why] ? tr(OS_GIVEN_UP[why]) : why || '?'});
+        {why: why === 'schedule' ? tr('the schedule starts the mower {when}', {when: when(t)}) : trWhy(OS_GIVEN_UP, why)});
     return h('div', {class: 'card run', 'data-update': 'os'},
       h('h3', null, tr('Back to OpenMower')),
       h('p', {class: 'warn'}, given),
@@ -1350,6 +1352,8 @@ function osRunCard(run) {
     dim(tr(go === 'os' ? "If MowBite OS doesn't run as it should, OpenMower comes back as it was." : 'The mower can mow again once OpenMower runs.')),
     failedHere('os'));
 }
+// a reason's text from its map, else the reason as it came
+const trWhy = (map, k) => (map[k] ? tr(map[k]) : k || '?');
 // why it isn't offered (os_switch "no <why>")
 const OS_NOT = {
   image: "the version of MowBite OS that's set can't be found",
@@ -1400,8 +1404,8 @@ const OS_GIVEN_UP = {
   registry: "OpenMower's version can't be downloaded right now, it would be needed for the way back",
   keep: "OpenMower's data couldn't be kept first",
   pull: "MowBite OS couldn't be downloaded",
-  files: 'this version of MowBite OS has no setup for this mower',
-  import: "this version of MowBite OS can't take over OpenMower's map",
+  files: OS_NOT.files,
+  import: OS_NOT.import,
 };
 // how the last one ended, like a part's result
 function osResult() {
@@ -1412,7 +1416,7 @@ function osResult() {
     case 'switched':
       return ok(tr(b === 'kept' ? 'switched to MowBite OS, with its own data from before' : "switched to MowBite OS, it took over OpenMower's map and settings"));
     case 'rolled_back':
-      return warn(tr("MowBite OS didn't run as it should: {why}. OpenMower runs again as before.", {why: OS_WHY[a] ? tr(OS_WHY[a]) : a || '?'}));
+      return warn(tr("MowBite OS didn't run as it should: {why}. OpenMower runs again as before.", {why: trWhy(OS_WHY, a)}));
     case 'back':
       if (b !== 'map') return ok(tr('back on OpenMower, with its own map from before the switch'));
       return c === 'lost' ? warn(tr("back on OpenMower with the map from MowBite OS, some areas couldn't be taken over")) : ok(tr('back on OpenMower, with the map from MowBite OS'));
@@ -1462,7 +1466,7 @@ function osPart() {
       go('switch:os', 'Switch to MowBite OS', 'Really switch?', 'switch=os')];
   } else if (offer === 'no') {
     const not = a === 'room' ? tr("there isn't room enough even with OpenMower's version deleted (needs about {need}, {has} there)", {need: mib(b), has: mib(c)})
-      : OS_NOT[a] ? tr(OS_NOT[a]) : a || '?';
+      : trWhy(OS_NOT, a);
     body = dim(tr("Switching to MowBite OS isn't possible right now: {why}.", {why: not}));
   }
   return h('div', {class: 'os'}, h('b', null, 'MowBite OS'), last, body, failedHere('os'));
@@ -1690,7 +1694,7 @@ let said = null;
 let saying = {text: '', bad: false};
 function overview() {
   const news = ALL().filter((p) => ['yes', 'switch'].includes(avail(p.id)) && !osParked(p));
-  const switching = askedSince('switch:os') !== null || askedSince('switch:openmower') !== null;
+  const switching = osTap() !== null;
   const osBad = osTrouble();
   const checked = /^\d+$/.test(S('checked')) ? Number(S('checked')) : null;
   const look = looking();

@@ -1693,7 +1693,7 @@ post conf "os t1" > /dev/null
 look_os "startswith('no datum')" && ok "not offered without the datum of its map" ||
   bad "without the datum: $(val "s.get('os_switch')")"
 sed -i '/^    gps:$/a\      datum_lat: 52.1\n      datum_long: 9.7\n      datum_height: 60.5' "$WORK/params/mower_params.yaml"
-look_os "endswith(' keep import')" && [ "$(val "s.get('os_switch', '').split(' ')[0]")" = yes ] &&
+look_os "endswith(' keep import')" && [ "$(said os_switch)" = yes ] &&
   ok "offered next to OpenMower's image, to import its data" || bad "the offer: $(val "s.get('os_switch')")"
 
 # (a halt in its health's log: OpenMower back as it was, the OS stopped)
