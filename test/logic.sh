@@ -1087,7 +1087,8 @@ os_fresh() {
   fresh
   rm -rf /fake/c/pl /fake/c/omq /fake/c/mowbite-os /fake/c/mowbite-mosquitto /stacks/* /fake/os_* /fake/up_fail /fake/pull_fail \
     /fake/reg_gone /fake/reg_down /fake/no_info /fake/foreign /fake/stop_fail /fake/om_nostart /fake/state /fake/sizes /fake/export \
-    /fake/external /fake/nostart* /fake/build_fail /fake/gh_down /fake/no_ids /fake/rm_fail_* /fake/no_list
+    /fake/external /fake/nostart* /fake/build_fail /fake/gh_down /fake/no_ids /fake/rm_fail_* /fake/no_list /fake/fw_blocked \
+    /fake/drain /fake/fw_late
   printf '%s\nr/os:t1 sha256:os -\n' "$OS_REFS" > /fake/refs
   printf 'sha256:om l1 l2 l3\nsha256:pl l1 l2 l3 p1\nsha256:mq q1\nsha256:mq2 q2\nsha256:mb m1\nsha256:os o1\n' > /fake/layers
   box_at pl sha256:pl r/pl:edge
@@ -1097,7 +1098,8 @@ os_fresh() {
   echo proj > /fake/c/omq/project
   printf '%s\n' "$TARGETS" > /fake/os_targets
   printf 'll/services/gps/datum_lat 53.1\nll/services/gps/datum_long "9.2"\nbackup x\n' > /fake/datum
-  echo '{"current_state":"IDLE","is_charging":1,"emergency_reason":0}' > /fake/state
+  echo '{"current_state":"IDLE","is_charging":1,"emergency_reason":0,"battery_percentage":0.8}' > /fake/state
+  echo 1 > /fake/os_fw
   echo 5000 > /fake/free
   echo 0 > /fake/up
   echo "os t1" > "$CONF"
@@ -1113,8 +1115,31 @@ os_away() {
   sed -i '/^r\/os:t1 /d' /fake/refs
   sed -i '/^sha256:os /d' /fake/layers
 }
+# the firmware major from the OS image's labels, here or in its registry
+fw_json='{"a":"b","mowbite.xcore.firmware.major":"1","z":"2"}'
+(
+  timeout() {
+    shift
+    "$@"
+  }
+  # (an image for one platform only: no list to pick from)
+  # shellcheck disable=SC2032
+  docker() { case $* in *linux/*) return 1 ;; *) echo "$fw_json" ;; esac; }
+  id_of() { :; }
+  [ "$(os_fw_major x)" = 1 ] || bad "os: the firmware major not read from the image's labels: $(os_fw_major x)"
+  id_of() { return 1; }
+  fw_json='{"mowbite.xcore.firmware.major":"2"}'
+  [ "$(os_fw_major x)" = 2 ] || bad "os: the firmware major not read from its registry: $(os_fw_major x)"
+  id_of() { :; }
+  for fw_json in '{"mowbite.xcore.firmware.major":""}' null '{"mowbite.xcore.firmware.minor":"1"}' '{"mowbite.xcore.firmware.major":"1a"}'; do
+    [ -z "$(os_fw_major x)" ] || bad "os: a firmware major from $fw_json: $(os_fw_major x)"
+  done
+  exit "$fails"
+) || fails=$?
 stacks_root() { echo /stacks; }
 find_parts() { :; }
+fw_blocked() { if [ -e /fake/fw_blocked ]; then return 0; fi; return 1; }
+os_fw_major() { cat /fake/os_fw; }
 free_mb() { cat /fake/free; }
 check_room() { { echo "cache 0"; cat /fake/os_room 2> /dev/null; } > "$STATE/room"; }
 in_registry() { [ -e /fake/reg_down ] && return 2; ! grep -qxF "$1" /fake/reg_gone 2> /dev/null; }
@@ -1138,6 +1163,8 @@ with_progress() {
 }
 pull_image() {
   echo "pull $1" >> /fake/calls
+  [ ! -e /fake/drain ] || echo '{"current_state":"IDLE","is_charging":1,"emergency_reason":0,"battery_percentage":0.3}' > /fake/state
+  [ ! -e /fake/fw_late ] || : > /fake/fw_blocked
   case $1 in
   *@*) echo "$1 sha256:om $1" >> /fake/refs && echo "sha256:om l1 l2 l3" >> /fake/layers ;;
   *) [ ! -e /fake/pull_fail ] && echo "$1 sha256:os -" >> /fake/refs && echo "sha256:os o1" >> /fake/layers ;;
@@ -1304,6 +1331,24 @@ for w in datum data registry image import writable files openmower pending stack
   [ "$(get os_switch)" = "no $w" ] || bad "os: $w not said: $(get os_switch)"
   echo 'listener 1883' > /fake/osimg/mosquitto.conf
 done
+# the stack's .env made anew from the image's env.example, what was changed in it by hand kept, the updater's own not
+os_fresh
+mkdir -p /stacks/mowbite-os
+printf 'MOWBITE_OS_TAG=\nTZ=Europe/Berlin\nMOWBITE_DATA_DIR=/d/old\nMOWBITE_JOURNAL_DIR=/d/journal\n' > /stacks/mowbite-os/env.example
+printf 'MOWBITE_OS_TAG=t0\r\nTZ=Europe/Paris\r\nMOWBITE_DATA_DIR=/d/mine\r\nMOWBITE_JOURNAL_DIR=/d/journal\r\nEXTRA=1\r\nMOWBITE_IMPORT_ROS=/x\r\n' > /stacks/mowbite-os/.env
+sed -i 's|^MOWBITE_JOURNAL_DIR=.*|MOWBITE_JOURNAL_DIR=/d/j2|' /fake/osimg/env.example
+status os_stack mbt-os
+os_files r/os:t1 /tmp/os.env "53.1 9.2 0 /vol/ros /vol/params"
+[ "$(sort /tmp/os.env/.env | tr '\n' ' ')" = "EXTRA=1 MOWBITE_DATA_DIR=/d/mine MOWBITE_DATUM_HEIGHT=0 MOWBITE_DATUM_LAT=53.1 MOWBITE_DATUM_LONG=9.2 MOWBITE_IMPORT_PARAMS=/vol/params MOWBITE_IMPORT_ROS=/vol/ros MOWBITE_JOURNAL_DIR=/d/j2 MOWBITE_OS_TAG=t1 TZ=Europe/Paris " ] ||
+  bad "os: the .env from before not kept as it should: $(sort /tmp/os.env/.env | tr '\n' ' ')"
+(
+  os_kept() { [ "$1" = /d/mine ]; }
+  os_look
+)
+[ "$(get os_switch)" = "yes 0 keep kept" ] || bad "os: the data_dir set by hand not looked at: $(get os_switch)"
+rm -rf /tmp/os.env /stacks/mowbite-os
+status os_stack
+sed -i 's|^MOWBITE_JOURNAL_DIR=.*|MOWBITE_JOURNAL_DIR=/d/journal|' /fake/osimg/env.example
 # the CGI only what's offered
 cp /r/www/cgi-bin/updater /fake/cgi
 cgi() { REQUEST_METHOD=POST CONTENT_TYPE=application/json QUERY_STRING=$1 sh /fake/cgi > /dev/null 2>&1; }
@@ -1420,8 +1465,8 @@ for w in health halt info emergency calm pull up broker not_docked schedule stop
   health) echo unhealthy > /fake/os_health ;;
   halt) echo 'MOWBITE_OS_HALT reason=SCHEMA_NEWER' > /fake/os_log ;;
   info) : > /fake/no_info ;;
-  emergency) echo '{"current_state":"IDLE","emergency_reason":4098}' > /fake/state ;;
-  calm) echo '{"current_state":"IDLE","emergency_reason":1}' > /fake/state ;;
+  emergency) echo '{"current_state":"IDLE","emergency_reason":4098,"battery_percentage":0.8}' > /fake/state ;;
+  calm) echo '{"current_state":"IDLE","emergency_reason":1,"battery_percentage":0.8}' > /fake/state ;;
   pull) os_away && : > /fake/pull_fail ;;
   up) : > /fake/up_fail ;;
   broker) : > /fake/foreign ;;
@@ -1443,6 +1488,33 @@ for w in health halt info emergency calm pull up broker not_docked schedule stop
     ;;
   esac
   echo 1 > /fake/mower
+done
+
+# the battery and the board's firmware: nothing pulled or stopped, and nothing stopped when it changes meanwhile
+for w in battery nobattery half fw label nolabel drain fw_late; do
+  os_fresh
+  os_away
+  case $w in
+  battery) echo '{"current_state":"IDLE","is_charging":1,"battery_percentage":0.49}' > /fake/state ;;
+  nobattery) echo '{"current_state":"IDLE","is_charging":1}' > /fake/state ;;
+  half) echo '{"current_state":"IDLE","is_charging":1,"emergency_reason":0,"battery_percentage":0.5}' > /fake/state ;;
+  fw) : > /fake/fw_blocked ;;
+  label) echo 2 > /fake/os_fw ;;
+  nolabel) : > /fake/os_fw ;;
+  drain | fw_late) : > "/fake/$w" ;;
+  esac
+  alone os os_switch os
+  case $w in
+  half) [ "$(get os | cut -d' ' -f1)" = switched ] || bad "os: not switched at 50 %: $(get os)" ;;
+  battery | nobattery | fw | label | nolabel)
+    case $w in *battery) x="battery 50" ;; *) x=firmware ;; esac
+    [ "$(get os)" = "error $x" ] && on_om && no_notes && ! called '^stop' && ! called '^pull' || bad "os: $w, but: $(get os), $(policies)"
+    ;;
+  *)
+    case $w in drain) x="battery 50" ;; *) x=firmware ;; esac
+    [ "$(get os)" = "error $x" ] && called '^pull' && on_om && no_notes && ! called '^stop' || bad "os: $w meanwhile, but: $(get os), $(policies)"
+    ;;
+  esac
 done
 
 # a planner built on OpenMower's version before stops with it too
@@ -1507,6 +1579,39 @@ alone os os_switch openmower
 [ "$(first '^pull r/om@sha256:dom')" -lt "$(first 'compose om .*--no-start')" ] && [ "$(cat /vol/ros/map.json)" = '{"areas":["os"]}' ] ||
   bad "os: OpenMower not made again with the OS's map: $(grep '^pull\|compose' /fake/calls | tr '\n' '|')"
 [ "$(first '^build pl')" -lt "$(first '^start om$')" ] || bad "os: the planner not built before OpenMower"
+# OpenMower made again and not started yet: its broker answers, it doesn't (0 unknown), the planner built all the same.
+# its broker not answering: not built, OpenMower not back, a tap goes on once it answers
+for w in quiet mute; do
+  os_fresh
+  os_away
+  echo 1000 > /fake/free
+  echo 'sha256:om 5.8GB' > /fake/sizes
+  alone os os_switch os
+  echo 0 > /fake/export
+  echo '{"areas":["os"]}' > /fake/os_map
+  echo '{"lost": []}' > /fake/os_report
+  : > /fake/calls
+  [ "$w" = quiet ] || : > /fake/mute
+  (
+    # (OM_PLANNER=external: OpenMower up only with the planner)
+    seen() {
+      echo "seen $1 $2" >> /fake/calls
+      running "$(box "$1")" && { [ "$1" != openmower ] || running pl; }
+    }
+    mower() { if running om || running mowbite-os; then cat /fake/mower; elif [ ! -e /fake/mute ] && running omq; then echo "0 unknown"; fi; }
+    os_broker() { [ ! -e /fake/mute ] && running omq; }
+    alone os os_switch openmower
+    if [ "$w" = mute ]; then
+      [ "$(get os)" = "error back" ] && ! called '^build pl' || bad "os: back with a broker that doesn't answer: $(get os), $(policies)"
+      rm /fake/mute
+      : > /fake/calls
+      alone os os_switch openmower
+    fi
+  )
+  [ "$(get os | cut -d' ' -f1,3-)" = "back map" ] && running om && running pl && [ "$(first '^build pl')" -lt "$(first '^start om$')" ] ||
+    bad "os: $w, the planner not built on OpenMower made again: $(get os), $(policies)"
+done
+rm -f /fake/mute
 # a planner that doesn't run on OpenMower made again: removed again, its note kept
 os_fresh
 os_away

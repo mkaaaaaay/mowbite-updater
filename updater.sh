@@ -2083,6 +2083,12 @@ OS_WAIT=${UPDATER_OS_WAIT:-300}
 OS_CALM=${UPDATER_OS_CALM:-60}
 # the emergency bits 1, 8 and 12
 OS_BITS=4354
+# the battery in percent it takes at least
+OS_BATTERY=50
+# the firmware major OpenMower runs with (mower_comms_v2 keeps the motors off for any other), and the label the OS's
+# image says its own with
+OM_FW_MAJOR=1
+OS_FW_LABEL=mowbite.xcore.firmware.major
 
 os_ref() {
   local v
@@ -2090,6 +2096,25 @@ os_ref() {
   valid "$v" "$TAG" && echo "$OS_REPO:$v"
 }
 os_dir() { echo "$(stacks_root)/$OS_STACK"; }
+# OpenMower's battery at OS_BATTERY or more (its robot_state says 0 to 1)
+os_charged() {
+  awk -v v="$(mqtt robot_state/json | sed -n 's/.*"battery_percentage": *\([0-9.]*\).*/\1/p')" -v m="$OS_BATTERY" 'BEGIN {exit !(v != "" && v * 100 >= m)}'
+}
+# the firmware major the OS's image $1 expects, from its label here or in its registry
+os_fw_major() {
+  if id_of "$1" > /dev/null; then
+    docker image inspect -f '{{json .Config.Labels}}' "$1" 2> /dev/null
+  else
+    timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format "{{json (index .Image \"linux/$(arch)\").Config.Labels}}" 2> /dev/null ||
+      timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format '{{json .Image.Config.Labels}}' 2> /dev/null
+  fi | awk -v k="\"$OS_FW_LABEL\":\"" '(i = index($0, k)) {s = substr($0, i + length(k)); sub(/".*/, "", s); print s; exit}' | grep -x '[0-9][0-9]*'
+}
+# the board's firmware fits the OS: OpenMower runs on it (no FIRMWARE_INCOMPATIBLE, so it's OM_FW_MAJOR) and the OS's
+# image expects that one
+os_fw_fits() {
+  fw_blocked
+  [ $? -eq 1 ] && [ "$(os_fw_major "$(os_ref)")" = "$OM_FW_MAJOR" ]
+}
 # on its way or on the OS: OpenMower's containers stopped or about to be
 os_busy() { [ -n "$(get switch_os)$(get os_ran)" ]; }
 # a part left alone meanwhile: OpenMower, what was stopped or removed with it
@@ -2131,7 +2156,19 @@ os_files() {
   done
   # shellcheck disable=SC2086
   set -- "${img##*:}" $3
-  { grep -vE '^(MOWBITE_OS_TAG|MOWBITE_DATUM_LAT|MOWBITE_DATUM_LONG|MOWBITE_DATUM_HEIGHT|MOWBITE_IMPORT_ROS|MOWBITE_IMPORT_PARAMS)=' "$dir/env.example"
+  # (what was changed by hand in the stack's .env from before stays: a line that differs from the env.example it came
+  # from, not one of the updater's own)
+  { awk -v old="$(os_dir)/.env" -v was="$(os_dir)/env.example" -v own='^(MOWBITE_OS_TAG|MOWBITE_DATUM_LAT|MOWBITE_DATUM_LONG|MOWBITE_DATUM_HEIGHT|MOWBITE_IMPORT_ROS|MOWBITE_IMPORT_PARAMS)=' '
+      function key(l) { sub(/=.*/, "", l); return l }
+      BEGIN {
+        while ((getline l < was) > 0) { sub(/\r$/, "", l); ex[l] = 1 }
+        while ((getline l < old) > 0) { sub(/\r$/, "", l); if (l ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && l !~ own && !(l in ex)) set[key(l)] = l }
+      }
+      { sub(/\r$/, "") }
+      $0 ~ own { next }
+      /^[A-Za-z_][A-Za-z0-9_]*=/ && (key($0) in set) { print set[key($0)]; delete set[key($0)]; next }
+      { print }
+      END { for (k in set) print set[k] }' "$dir/env.example"
     printf 'MOWBITE_OS_TAG=%s\nMOWBITE_DATUM_LAT=%s\nMOWBITE_DATUM_LONG=%s\nMOWBITE_DATUM_HEIGHT=%s\nMOWBITE_IMPORT_ROS=%s\nMOWBITE_IMPORT_PARAMS=%s\n' "$@"
   } > "$dir/.env" || return 1
   out=$(os_compose $T_REGISTRY "$dir" config 2> /dev/null) || return 1
@@ -2161,7 +2198,7 @@ os_kept() {
 # mower_params.yaml, kept: its data_dir has its own from before. for the way there os_way, os_need (MB free it needs),
 # os_new, os_env_now, os_prev, os_holders (what goes with drop), os_parts and os_wants (the builds on it)
 os_look() {
-  local ref img mb have x c p w ros params
+  local ref img mb have x c p w ros params dd=''
   if os_busy; then
     os_safety
     return 1
@@ -2187,6 +2224,7 @@ os_look() {
     mb=0
     os_files "$ref" "$STATE/os.look" "$os_env_now"
     x=$?
+    dd=$(env_val "$STATE/os.look/.env" MOWBITE_DATA_DIR)
     rm -rf "$STATE/os.look"
     case $x in 0) ;; 2) status os_switch no import; return 1 ;; *) status os_switch no files; return 1 ;; esac
   else
@@ -2219,7 +2257,9 @@ os_look() {
     done
     os_way=drop
   fi
-  if os_kept "$(env_val "$(os_dir)/.env" MOWBITE_DATA_DIR)"; then os_new=kept; else os_new=import; fi
+  # (the image not here: its data_dir as the stack's .env from before says)
+  [ -n "$dd" ] || dd=$(env_val "$(os_dir)/.env" MOWBITE_DATA_DIR)
+  if os_kept "$dd"; then os_new=kept; else os_new=import; fi
   status os_switch yes "$mb" "$os_way" "$os_new"
 }
 
@@ -2235,7 +2275,7 @@ os_safety() {
 }
 
 # form: status os switched <unix s> import|kept|rolled_back pull|files|import|start|health|halt|info|state|emergency|back <unix s> map|old [lost]
-# form: status os error offer|schedule <unix s>|not_docked|hold|keep|pull|files|import|stop|broker|registry|busy|back|interrupted
+# form: status os error offer|schedule <unix s>|not_docked|battery <min %>|firmware|hold|keep|pull|files|import|stop|broker|registry|busy|back|interrupted
 # a tap on its card: to MowBite OS (os) or back to OpenMower (openmower)
 os_switch() {
   if [ "$1" = os ]; then os_there; else os_back; fi
@@ -2267,6 +2307,16 @@ os_there() {
   if ! docked; then
     log "os: the mower isn't idle in the dock, OpenMower stays"
     outcome os error not_docked
+    return 1
+  fi
+  if ! os_charged; then
+    log "os: the battery is under $OS_BATTERY %, OpenMower stays"
+    outcome os error battery "$OS_BATTERY"
+    return 1
+  fi
+  if ! os_fw_fits; then
+    log "os: the board's firmware major isn't known to fit MowBite OS ($(os_ref)), OpenMower stays"
+    outcome os error firmware
     return 1
   fi
   keep_data openmower update || { outcome os error keep; return 1; }
@@ -2382,6 +2432,8 @@ os_pull() {
     fi
     return 1
   fi
+  # (import or kept once more, by the .env it starts with)
+  if os_kept "$(env_val "$STATE/os.new/.env" MOWBITE_DATA_DIR)"; then set -- "$1" "$2" "$3" kept; else set -- "$1" "$2" "$3" import; fi
   status os_image "$1" "$(id_of "$1")" "$3" "$4"
   if [ -n "$(get os_ran)" ]; then status switch_os os start; else status switch_os os stop; fi
 }
@@ -2432,6 +2484,10 @@ os_stop() {
       why=hold
     elif ! docked; then
       why=not_docked
+    elif ! os_charged; then
+      why="battery $OS_BATTERY"
+    elif ! os_fw_fits; then
+      why=firmware
     elif at=$(soon); then
       why="schedule $at"
     fi

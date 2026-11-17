@@ -357,6 +357,12 @@ const DE = {
   'back on OpenMower, with its own map from before the switch': 'zurück auf OpenMower, mit seiner eigenen Karte von vor dem Wechsel',
   "nothing done: it isn't possible right now": 'nicht gemacht: Das geht gerade nicht',
   "nothing done: MowBite's schedule couldn't be held": 'nicht gemacht: Der Zeitplan von MowBite ließ sich nicht anhalten',
+  "nothing done: the firmware on the mower's board doesn't fit this version of MowBite OS, or it couldn't be checked":
+    'nicht gemacht: Die Firmware auf der Platine des Mähers passt nicht zu dieser Version von MowBite OS, oder sie ließ sich nicht prüfen',
+  "the firmware on the mower's board doesn't fit this version of MowBite OS, or it couldn't be checked":
+    'die Firmware auf der Platine des Mähers passt nicht zu dieser Version von MowBite OS, oder sie ließ sich nicht prüfen',
+  "not done: the battery is under {min} %. Tap again once it's charged.": 'nicht gemacht: Der Akku hat weniger als {min} %. Noch einmal tippen, wenn er geladen ist.',
+  'the battery was under {min} %': 'der Akku hatte weniger als {min} %',
   "nothing done: OpenMower's data couldn't be kept first": 'nicht gemacht: Die Daten von OpenMower ließen sich vorher nicht sichern',
   "nothing done: MowBite OS couldn't be downloaded. Does the mower have internet?": 'nicht gemacht: MowBite OS ließ sich nicht laden. Hat der Mäher Internet?',
   'nothing done: this version of MowBite OS has no setup for this mower': 'nicht gemacht: Diese Version von MowBite OS bringt keine Einrichtung für diesen Mäher mit',
@@ -1335,7 +1341,8 @@ function osRunCard(run) {
     const given = kind === 'rolled_back'
       ? tr("MowBite OS didn't run as it should: {why}. OpenMower comes back as it was.", {why: trWhy(OS_WHY, why)})
       : tr('The switch was given up: {why}. OpenMower comes back as it was.',
-        {why: why === 'schedule' ? tr('the schedule starts the mower {when}', {when: when(t)}) : trWhy(OS_GIVEN_UP, why)});
+        {why: why === 'schedule' ? tr('the schedule starts the mower {when}', {when: when(t)})
+          : why === 'battery' ? tr('the battery was under {min} %', {min: t}) : trWhy(OS_GIVEN_UP, why)});
     return h('div', {class: 'card run', 'data-update': 'os'},
       h('h3', null, tr('Back to OpenMower')),
       h('p', {class: 'warn'}, given),
@@ -1380,10 +1387,11 @@ const OS_WHY = {
   files: 'its setup for this mower is missing',
   import: "it can't take over OpenMower's map",
 };
-// os "error <why>": schedule and not_docked as a part's
+// os "error <why>": schedule and not_docked as a part's, battery with its least
 const OS_ERRORS = {
   offer: "nothing done: it isn't possible right now",
   hold: "nothing done: MowBite's schedule couldn't be held",
+  firmware: "nothing done: the firmware on the mower's board doesn't fit this version of MowBite OS, or it couldn't be checked",
   keep: "nothing done: OpenMower's data couldn't be kept first",
   pull: "nothing done: MowBite OS couldn't be downloaded. Does the mower have internet?",
   files: 'nothing done: this version of MowBite OS has no setup for this mower',
@@ -1395,10 +1403,12 @@ const OS_ERRORS = {
   back: "OpenMower didn't come back, the mower can't mow. Tap Continue the way back.",
   interrupted: 'stopped before anything changed (the mower or the updater restarted), OpenMower stays',
 };
-// why the way there was given up after OpenMower had stopped ("os back error <why>"): schedule with its time
+// why the way there was given up after OpenMower had stopped ("os back error <why>"): schedule with its time, battery
+// with its least
 const OS_GIVEN_UP = {
   hold: "MowBite's schedule couldn't be held",
   not_docked: "the mower wasn't ready in the dock",
+  firmware: "the firmware on the mower's board doesn't fit this version of MowBite OS, or it couldn't be checked",
   stop: "something couldn't be stopped",
   broker: "something else still answers on the mower's MQTT port",
   registry: "OpenMower's version can't be downloaded right now, it would be needed for the way back",
@@ -1423,6 +1433,7 @@ function osResult() {
     case 'error':
       if (a === 'schedule') return ok(tr('not done: the schedule starts the mower {when}, OpenMower is left alone until then', {when: when(b)}));
       if (a === 'not_docked') return warn(tr("not done: the mower wasn't ready in the dock. Tap again when it's there."));
+      if (a === 'battery') return warn(tr("not done: the battery is under {min} %. Tap again once it's charged.", {min: b}));
       return {text: OS_ERRORS[a] ? tr(OS_ERRORS[a]) : tr('failed ({why})', {why: a || '?'}), level: a === 'back' || a === 'stop' ? 'error' : 'warn'};
     default:
       return null;
