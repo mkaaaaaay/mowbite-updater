@@ -21,6 +21,8 @@
 # its next start. images built here aren't replaced or deleted by itself. last the leftovers go: its older rollback
 # tags, images nothing uses, the build cache. what it does right now goes to the status as progress, for the bars on its
 # page
+# on a tap and with the OS's image set, it puts MowBite OS in OpenMower's place and back (see "MowBite OS instead of
+# OpenMower")
 . /lib.sh
 # rollback tags (rb-<time>-<image>) kept once all runs again: an app's are small, OpenMower's and builds' are GBs
 KEEP=2
@@ -74,10 +76,10 @@ mower() {
   fi
   state=$(printf '%s' "$s" | sed -n 's/.*"current_state": *"\([A-Z_]*\)".*/\1/p')
   charging=$(printf '%s' "$s" | sed -n 's/.*"is_charging": *\([a-z0-9]*\).*/\1/p')
-  # (idle but driven by hand or calibrating on MowBite OS: busy like mowing)
+  # (idle but driven by hand, calibrating or in its setup on MowBite OS: busy like mowing)
   sub=$(printf '%s' "$s" | sed -n 's/.*"current_sub_state": *"\([A-Z_]*\)".*/\1/p')
   if [ "$state" = IDLE ]; then
-    case $sub in DRIVING | CALIBRATING) echo "0 $sub" && return 0 ;; esac
+    case $sub in DRIVING | CALIBRATING | SETUP) echo "0 $sub" && return 0 ;; esac
   fi
   if [ "$state" = IDLE ]; then
     case $charging in 1 | true) echo 1 && return 0 ;; esac
@@ -357,9 +359,10 @@ find_parts() {
   local out="" c x id far="" picked cand mine
   # (itself, also by its image: under another name it isn't an app to update from inside)
   mine=$(repo_of "$(ref_of "$ME")")
-  # (one removed for OpenMower's update without a copy that's there again: its note goes, not while they're removed)
-  case $(get nokeep_openmower) in
-  rm\ *) ;;
+  # (one removed for OpenMower's update without a copy that's there again: its note goes, not while they're removed, nor
+  # on the way to MowBite OS)
+  case $(get nokeep_openmower):$(get switch_os) in
+  rm\ *:* | *:os\ *) ;;
   *) gone_list | while read -r x c; do exists "$c" && status "$x"; done ;;
   esac
   # (left by a stop right before such an update started)
@@ -616,10 +619,10 @@ data_of() {
   esac
 }
 # data.sh in a helper of its own image without network: $1 "<what to mount>|<piece>" at /s (read-only, but to put
-# back), a kept copy's folder $4 to put back from or a new one's to keep in. what it says
+# back), a kept copy's folder $4 to put back from or a new one's to keep in (an export to swap in). what it says
 data_run() {
   local w="$1" what="$2" n="$3" dir="$4" mode=ro at=/o
-  [ "$what" = put ] && mode=rw && at=/b:ro
+  case $what in put | swap) mode=rw at=/b:ro ;; esac
   # shellcheck disable=SC2086
   docker run --rm --network none --pull never -v "${w%|*}:/s:$mode" ${dir:+-v "$dir:$at"} --entrypoint sh "$(image_of "$ME")" \
     /data.sh "$what" "$n" "${w##*|}"
@@ -1655,20 +1658,16 @@ nokeep_look() {
   [ -z "$only" ] || has=$((has + $(image_bytes "$before") / 1048576))
   need=$(awk '{s += $2} END {printf "%d\n", s * 5 / 1048576 + 1024}' "$STATE/layers")
   if [ -z "$only" ] || [ "$has" -lt "$need" ]; then status openmower_nokeep no room "$need" "$has"; return 1; fi
-  nk_holders=$(docker images -aq --no-trunc 2>/dev/null | sort -u | xargs -r docker image inspect -f '{{.Id}} {{range .RootFS.Layers}}{{.}} {{end}}' 2>/dev/null |
-    awk -v only=" $only" '{for (i = 2; i <= NF; i++) if (index(only, " " $i " ")) {print $1; next}}')
+  nk_holders=$(holders_of "$only")
   if ! printf '%s\n' "$nk_holders" | grep -qxF -- "$before"; then status openmower_nokeep no holders; return 1; fi
   [ "$target" != "$ref" ] || back=$ref
-  for c in $(docker ps -aq --no-trunc 2>/dev/null | xargs -r docker inspect -f '{{.Image}} {{.Name}}' 2>/dev/null |
-    awk -v h=" $(printf '%s' "$nk_holders" | tr '\n' ' ') " 'index(h, " " $1 " ") {sub(/^\//, "", $2); print $2}'); do
+  for c in $(boxes_on "$nk_holders"); do
     [ "$c" != "$OM" ] || continue
     p=$(get parts | tr ' ' '\n' | awk -F: -v c="$c" '$2 == c && $3 == "build" {print $1; exit}')
     if [ -z "$p" ] || [ "$(base_of "$c")" != "$ref" ]; then status openmower_nokeep no box "$c"; return 1; fi
     # (built again on the new version only when that comes under the same tag)
     [ "$target" = "$ref" ] || { status openmower_nokeep no base "$p"; return 1; }
-    w=$(want_of "$p") || w=
-    [ -n "$w" ] || [ -z "$(built_of "$p")" ] || [ -z "$(get "${p}_release")" ] || w="$(built_of "$p") $(get "${p}_release") release"
-    [ -n "$w" ] || { status openmower_nokeep no github "$p"; return 1; }
+    w=$(rebuild_want "$p") || { status openmower_nokeep no github "$p"; return 1; }
     nk_parts="$nk_parts $p"
     nk_wants="$nk_wants$p $w
 "
@@ -1678,6 +1677,24 @@ nokeep_look() {
   status openmower_nokeep yes "$(awk '{s += $2} END {printf "%d\n", s / 1048576}' "$STATE/layers")" \
     "$(printf '%s' "$nk_parts" | sed 's/^ //; s/ /,/g' | grep . || echo -)" "${back:--}" \
     "$(printf '%s\n' "$all" | awk -v k=",$back," 'NF && !index(k, "," $0 ",")' | tr '\n' ',' | sed 's/,$//' | grep . || echo -)"
+}
+# the images with any of the layers $1 (ids)
+holders_of() {
+  docker images -aq --no-trunc 2>/dev/null | sort -u | xargs -r docker image inspect -f '{{.Id}} {{range .RootFS.Layers}}{{.}} {{end}}' 2>/dev/null |
+    awk -v only=" $1" '{for (i = 2; i <= NF; i++) if (index(only, " " $i " ")) {print $1; next}}'
+}
+# the containers on any of the images $1, there or stopped
+boxes_on() {
+  docker ps -aq --no-trunc 2>/dev/null | xargs -r docker inspect -f '{{.Image}} {{.Name}}' 2>/dev/null |
+    awk -v h=" $(printf '%s' "$1" | tr '\n' ' ') " 'index(h, " " $1 " ") {sub(/^\//, "", $2); print $2}'
+}
+# what a build on OpenMower's image is built from again once that's back, "<commit> <name> <how>": github's newest, else
+# the release it runs
+rebuild_want() {
+  local w
+  w=$(want_of "$1") || w=
+  [ -n "$w" ] || [ -z "$(built_of "$1")" ] || [ -z "$(get "${1}_release")" ] || w="$(built_of "$1") $(get "${1}_release") release"
+  [ -n "$w" ] && echo "$w"
 }
 # a part's container noted before it's removed (gone_<part>), with what's to be built of it ($2). 1 when it can't be
 gone_note() {
@@ -2044,6 +2061,652 @@ nokeep_missing() {
   else
     log "openmower: isn't on the mower, tried again at $(date -d "@$next" '+%F %T') (try $((n + 1)) of $NOKEEP_TRIES by itself)"
   fi
+}
+
+# --- MowBite OS instead of OpenMower ---
+
+# MowBite OS in OpenMower's place, on a tap on its card, offered once its image is set (conf os: a tag of OS_REPO).
+# OpenMower's data kept, its containers stopped with MowBite's (the OS brings its own app), its image and what's built
+# on it deleted first only when the OS has no room next to it, then the OS's stack made from the files in its image with
+# OpenMower's map and mower_params.yaml for its import, and seen running, else OpenMower as it was. back the same way:
+# the OS's map exported into OpenMower's map.json, the OS stopped, its data_dir left as it is. never both at the board,
+# nothing written to the OS's broker
+OS_REPO=${MOWBITE_OS_REPO:-ghcr.io/mkaaaaaay/mowbite-os}
+OS_FILES=/usr/share/mowbite-os/mower
+OS_STACK=mowbite-os
+# (seconds: its start period and its checks, then how long a bit that keeps it stopped may stand)
+OS_WAIT=${UPDATER_OS_WAIT:-300}
+OS_CALM=${UPDATER_OS_CALM:-60}
+# the emergency bits 1, 8 and 12
+OS_BITS=4354
+
+os_ref() {
+  local v
+  v=$(conf os "")
+  valid "$v" "$TAG" && echo "$OS_REPO:$v"
+}
+os_dir() { echo "$(stacks_root)/$OS_STACK"; }
+# on its way or on the OS: OpenMower's containers stopped or about to be
+os_busy() { [ -n "$(get switch_os)$(get os_ran)" ]; }
+# a part left alone meanwhile: OpenMower, what was stopped or removed with it
+os_parked() {
+  os_busy || return 1
+  [ "$(kind "$1")" = openmower ] && return 0
+  case " $(get os_ran) " in *" $(box "$1"):"*) return 0 ;; esac
+  [ -n "$(get "gone_$1")" ]
+}
+# the host's folder OpenMower has at $1 (/data/ros, /data/params), a bind mount
+os_src() { mounts "$OM" | awk -F'|' -v d="$1" '$1 == "bind" && $3 == d && $2 ~ /^\// {print $2; exit}'; }
+# the datum of OpenMower's map as mower_params.yaml has it, "<lat> <long> <height>" (no height: 0, as OpenMower takes it)
+os_datum() {
+  calib_run read ll/services/gps/datum_lat ll/services/gps/datum_long ll/services/gps/datum_height | awk '
+    { gsub(/["\047]/, "", $2) }
+    $2 !~ /^-?[0-9]+(\.[0-9]+)?$/ { next }
+    $1 == "ll/services/gps/datum_lat" { lat = $2 }
+    $1 == "ll/services/gps/datum_long" { lon = $2 }
+    $1 == "ll/services/gps/datum_height" { h = $2 }
+    END { if (lat == "" || lon == "") exit 1; print lat, lon, (h == "" ? 0 : h) }'
+}
+# a value of an env file
+env_val() { { tr -d '\r' < "$1"; } 2> /dev/null | sed -n "s/^$2=//p" | tail -n1 | sed "s/^[\"']//; s/[\"']\$//"; }
+# compose on the OS's stack in folder $2 within $1 seconds, its .env from there, the OS's profile on
+os_compose() {
+  local t="$1" dir="$2"
+  shift 2
+  timeout "$t" docker compose --project-directory "$dir" -f "$dir/compose.yaml" --profile os "$@"
+}
+# the stack's files out of image $1 into folder $2 (compose.yaml, mosquitto.conf, env.example) and its .env: the
+# example's values with this mower's, "$3" as os_env has them. 1 a file isn't there, 2 its compose file takes neither
+# OpenMower's data nor has an export
+os_files() {
+  local img="$1" dir="$2" f out t
+  rm -rf "$dir" && mkdir -p "$dir/export" || return 1
+  for f in nx60i.compose.yaml:compose.yaml mosquitto.conf:mosquitto.conf env.example:env.example; do
+    timeout $T_REGISTRY docker run --rm --network none --pull never --entrypoint cat "$img" "$OS_FILES/${f%%:*}" > "$dir/${f#*:}" 2> /dev/null &&
+      [ -s "$dir/${f#*:}" ] || return 1
+  done
+  # shellcheck disable=SC2086
+  set -- "${img##*:}" $3
+  { grep -vE '^(MOWBITE_OS_TAG|MOWBITE_DATUM_LAT|MOWBITE_DATUM_LONG|MOWBITE_DATUM_HEIGHT|MOWBITE_IMPORT_ROS|MOWBITE_IMPORT_PARAMS)=' "$dir/env.example"
+    printf 'MOWBITE_OS_TAG=%s\nMOWBITE_DATUM_LAT=%s\nMOWBITE_DATUM_LONG=%s\nMOWBITE_DATUM_HEIGHT=%s\nMOWBITE_IMPORT_ROS=%s\nMOWBITE_IMPORT_PARAMS=%s\n' "$@"
+  } > "$dir/.env" || return 1
+  out=$(os_compose $T_REGISTRY "$dir" config 2> /dev/null) || return 1
+  for t in /import/openmower/ros /import/openmower/params /export; do
+    printf '%s\n' "$out" | grep -q "^ *target: $t\$" || return 2
+  done
+}
+# whether data_dir $1 has data of the OS from before (kept): it imports OpenMower's only into one without any (import),
+# or once more after an import cut off. a folder that isn't there is empty
+os_kept() {
+  [ -n "$1" ] && docker run --rm --network none --pull never --mount "type=bind,src=$1,dst=/d,readonly" --entrypoint sh "$(image_of "$ME")" -c '
+    cd /d || exit 3
+    if [ -f migrate.json ]; then grep -q "\"state\": *\"pending\"" migrate.json && exit 3; exit 0; fi
+    for f in * .[!.]* ..?*; do
+      [ -e "$f" ] || [ -L "$f" ] || continue
+      case $f in data_schema.json | .lock | hold.json | restart-hold.json | os-session.json) ;; *) exit 0 ;; esac
+    done
+    exit 3' > /dev/null 2>&1
+}
+
+# form: status os_switch yes <MB downloaded> keep|drop import|kept
+# form: status os_switch no image|registry|data|datum|import|files|openmower|nokeep|pending|stack|prev|room <MB needed> <MB there>
+# form: status os_switch on <since, unix s>
+# whether MowBite OS can take OpenMower's place, for its card. keep: next to OpenMower's image, drop: that and what's
+# built on it deleted first, downloaded and built again on the way back. import: the OS takes OpenMower's map and
+# mower_params.yaml, kept: its data_dir has its own from before. for the way there os_way, os_need (MB free it needs),
+# os_new, os_env_now, os_prev, os_holders (what goes with drop), os_parts and os_wants (the builds on it)
+os_look() {
+  local ref img mb have x c p w
+  ref=$(os_ref) || { status os_switch; return 1; }
+  os_busy && return 1
+  os_way=''
+  os_need=0
+  os_prev=''
+  os_holders=''
+  os_parts=''
+  os_wants=''
+  if [ "$(kind openmower)" != openmower ] || ! running "$OM"; then status os_switch no openmower; return 1; fi
+  if nokeep_busy; then status os_switch no nokeep; return 1; fi
+  if grep -qE '^(pending_[a-z0-9_]+|gone_[a-z0-9_]+|data_put|calib_pending|openmower_missing) ' "$STATUS" 2> /dev/null; then
+    status os_switch no pending
+    return 1
+  fi
+  # (one there that the updater didn't make)
+  if [ -z "$(get os_stack)" ] && { [ -e "$(os_dir)" ] || [ -n "$(docker ps -aq --filter label=mowbite.os 2> /dev/null)" ]; }; then
+    status os_switch no stack
+    return 1
+  fi
+  if [ -z "$(os_src /data/ros)" ] || [ -z "$(os_src /data/params)" ]; then status os_switch no data; return 1; fi
+  x=$(os_datum) || { status os_switch no datum; return 1; }
+  os_env_now="$x $(os_src /data/ros) $(os_src /data/params)"
+  if id_of "$ref" > /dev/null; then
+    mb=0
+    os_files "$ref" "$STATE/os.look" "$os_env_now"
+    x=$?
+    rm -rf "$STATE/os.look"
+    case $x in 0) ;; 2) status os_switch no import; return 1 ;; *) status os_switch no files; return 1 ;; esac
+  else
+    in_registry "$ref"
+    case $? in 0) ;; 1) status os_switch no image; return 1 ;; *) status os_switch no registry; return 1 ;; esac
+    layers "$ref" > "$STATE/os.layers"
+    [ -s "$STATE/os.layers" ] || { status os_switch no registry; return 1; }
+    mb=$(awk '{s += $2} END {printf "%d\n", s / 1048576}' "$STATE/os.layers")
+    os_need=$(awk '{s += $2} END {printf "%d\n", s * 5 / 1048576 + 1024}' "$STATE/os.layers")
+  fi
+  # (what's free, the build cache and the images nothing needs, as check_room listed them)
+  have=$(free_mb)
+  have=$((${have:-0} + $(awk '$1 == "cache" || ($1 == "img" && ($5 == "dangling" || $5 == "unused")) {s += ($1 == "cache" ? $2 : $3)} END {printf "%d\n", s / 1048576}' "$STATE/room" 2> /dev/null || echo 0)))
+  if [ "$os_need" -le "$have" ]; then
+    os_way=keep
+  else
+    img=$(image_of "$OM")
+    os_prev=$(prev_of "$img" "$(repo_of "$(ref_of "$OM")")")
+    if [ -z "$os_prev" ] || ! in_registry "$os_prev"; then status os_switch no prev; return 1; fi
+    have=$((have + $(image_bytes "$img") / 1048576))
+    if [ "$have" -lt "$os_need" ]; then status os_switch no room "$os_need" "$have"; return 1; fi
+    os_holders=$(holders_of "$(docker image inspect -f '{{range .RootFS.Layers}}{{.}} {{end}}' "$img" 2> /dev/null)")
+    for c in $(boxes_on "$os_holders"); do
+      [ "$c" != "$OM" ] || continue
+      p=$(get parts | tr ' ' '\n' | awk -F: -v c="$c" '$2 == c && $3 == "build" {print $1; exit}')
+      [ -n "$p" ] && [ "$(base_of "$c")" = "$(ref_of "$OM")" ] && w=$(rebuild_want "$p") || { status os_switch no prev; return 1; }
+      os_parts="$os_parts $p"
+      os_wants="$os_wants$p $w
+"
+    done
+    os_way=drop
+  fi
+  if os_kept "$(env_val "$(os_dir)/.env" MOWBITE_DATA_DIR)"; then os_new=kept; else os_new=import; fi
+  status os_switch yes "$mb" "$os_way" "$os_new"
+}
+
+# form: status os switched <unix s> import|kept|rolled_back pull|files|import|start|health|halt|info|state|emergency|back <unix s> map|old [lost]
+# form: status os error offer|schedule <unix s>|not_docked|hold|keep|pull|files|import|stop|broker|registry|busy|back|interrupted
+# a tap on its card: to MowBite OS (os) or back to OpenMower (openmower)
+os_switch() {
+  if [ "$1" = os ]; then os_there; else os_back; fi
+  status progress
+}
+# form: status switch_os os pull|stop|drop|start|wait
+# form: status switch_os openmower export|stop|om|data|start [map|old [lost]]
+# form: status os_ran <container>:<its restart policy>:running|stopped ...
+# form: status os_image <image> <its id, or -> <MB free it needs> import|kept
+# form: status os_env <datum lat> <long> <height> <OpenMower's ros folder> <its params folder>
+# form: status os_drop <OpenMower by its digest> <its tag> <the images deleted> ...
+# form: status os_data <the folder of OpenMower's data kept before>
+# the way there: the offer once more, the schedule, the dock, OpenMower's data kept and what it needs noted, then on
+os_there() {
+  local at p ok=1
+  progress os prepare
+  check_room
+  if ! os_look; then
+    log "os: not offered ($(get os_switch | cut -d' ' -f2-)), OpenMower stays"
+    outcome os error offer
+    return 1
+  fi
+  if at=$(soon); then
+    log "os: MowBite's schedule may start the mower at $(date -d "@$at" '+%F %T'), OpenMower stays"
+    outcome os error schedule "$at"
+    return 1
+  fi
+  if ! docked; then
+    log "os: the mower isn't idle in the dock, OpenMower stays"
+    outcome os error not_docked
+    return 1
+  fi
+  keep_data openmower update || { outcome os error keep; return 1; }
+  status os_data ${kept:+"$kept"}
+  # shellcheck disable=SC2086
+  status os_env $os_env_now
+  status os_image "$(os_ref)" - "$os_need" "$os_new"
+  if [ "$os_way" = drop ]; then
+    for p in $os_parts openmower; do gone_note "$p" "$(printf '%s' "$os_wants" | sed -n "s/^$p //p")" || ok=; done
+    # shellcheck disable=SC2086
+    status os_drop "$os_prev" "$(ref_of "$OM")" $os_holders
+    if [ -z "$ok" ]; then
+      os_off
+      log "os: what it needs to bring OpenMower back can't be noted, OpenMower stays"
+      outcome os error keep
+      return 1
+    fi
+    status switch_os os stop
+  else
+    status switch_os os pull
+  fi
+  log "os: OpenMower -> MowBite OS ($(os_ref)), OpenMower's image $([ "$os_way" = drop ] && echo "deleted first" || echo kept)"
+  os_on
+}
+# the way back: on the OS idle in the dock, or on from where it stopped
+os_back() {
+  case $(get switch_os) in
+  "")
+    if [ -z "$(get os_ran)" ]; then
+      outcome os error offer
+      return 1
+    fi
+    if ! docked; then
+      log "os: the mower isn't idle in the dock, MowBite OS stays"
+      outcome os error not_docked
+      return 1
+    fi
+    log "os: MowBite OS -> OpenMower"
+    status switch_os openmower export
+    ;;
+  openmower\ *) log "os: back to OpenMower, on from $(get switch_os | cut -d' ' -f2)" ;;
+  *) return 1 ;;
+  esac
+  os_on
+}
+# on from its step, after a stop halfway too. each step notes the next or ends it
+os_on() {
+  while :; do
+    # shellcheck disable=SC2046
+    set -- $(get switch_os)
+    case $1:$2 in
+    os:pull) os_pull ;;
+    os:stop) os_stop ;;
+    os:drop) os_drop ;;
+    os:start) os_start ;;
+    os:wait) os_wait ;;
+    openmower:export) os_export ;;
+    openmower:stop) os_down && ! os_broker_left && status switch_os openmower om ${3:+"$3"} ${4:+"$4"} || { outcome os error stop; false; } ;;
+    openmower:om) os_om_make && status switch_os openmower data ${3:+"$3"} ${4:+"$4"} || { outcome os error back; false; } ;;
+    openmower:data) os_data ;;
+    openmower:start) os_om_back ;;
+    *) return 0 ;;
+    esac || return 1
+  done
+}
+# a stop halfway: before anything stopped the way there is given up, else on from its step
+os_resume() {
+  if [ "$(get switch_os)" = "os pull" ] && [ -z "$(get os_ran)" ]; then
+    os_off
+    log "os: stopped before anything changed, OpenMower stays"
+    outcome os error interrupted
+    return 1
+  fi
+  log "os: stopped halfway, on from $(get switch_os)"
+  os_on
+}
+
+# the OS's image downloaded with its progress (not when it's there), the stack's files taken out of it and checked, its
+# broker's image downloaded. keep: before anything stops, nothing changed when it fails. drop: OpenMower back then
+os_pull() {
+  local ref why=
+  # shellcheck disable=SC2046
+  set -- $(get os_image)
+  ref=$1
+  if ! id_of "$ref" > /dev/null; then
+    [ "$(free_mb | grep . || echo 0)" -ge "${3:-0}" ] || os_clear
+    log "os: downloading $ref"
+    with_progress os none pull_image "$ref" || why=pull
+  fi
+  if [ -z "$why" ]; then
+    os_files "$ref" "$STATE/os.new" "$(get os_env)"
+    case $? in 0) ;; 2) why=import ;; *) why=files ;; esac
+  fi
+  [ -n "$why" ] || for ref in $(os_compose $T_REGISTRY "$STATE/os.new" config --images 2> /dev/null | grep -vxF "$1"); do
+    id_of "$ref" > /dev/null || with_progress os none pull_image "$ref" || why=pull
+  done
+  if [ -n "$why" ]; then
+    rm -rf "$STATE/os.new"
+    if [ -n "$(get os_ran)" ]; then
+      os_undo rolled_back "$why"
+    else
+      os_off
+      log "os: $1 can't be had as it should ($why), OpenMower stays"
+      outcome os error "$why"
+    fi
+    return 1
+  fi
+  status os_image "$1" "$(id_of "$1")" "$3" "$4"
+  if [ -n "$(get os_ran)" ]; then status switch_os os start; else status switch_os os stop; fi
+}
+# what nothing needs cleared first: the build cache, images no container uses and no compose file names
+os_clear() {
+  local id refs r
+  check_room
+  [ "${PRUNE:-1}" = 0 ] || timeout $T_UP docker builder prune -af > /dev/null 2>&1
+  awk '$1 == "img" && ($5 == "dangling" || $5 == "unused") {print $2, $4}' "$STATE/room" | while read -r id refs; do
+    if [ "$refs" = - ]; then
+      docker rmi "$id" > /dev/null 2>&1
+    else
+      for r in $(echo "$refs" | tr ',' ' '); do docker rmi "$r" > /dev/null 2>&1; done
+    fi
+  done
+  log "os: cleared what nothing needs, $(free_mb) MB free"
+}
+# what stops for the OS: OpenMower's stack (its broker, its apps), the builds on its image, MowBite
+os_boxes() {
+  local p
+  {
+    docker ps -a --filter "label=com.docker.compose.project=$(label "$OM" project)" --format '{{.Names}}' 2> /dev/null
+    for p in $(part_ids); do
+      [ "$(kind "$p")" = build ] && [ "$(base_of "$(box "$p")")" = "$(ref_of "$OM")" ] && box "$p"
+    done
+    exists "$APP" && echo "$APP"
+  } | awk -v me="$ME" -v self="$SELF" 'NF && $0 != me && $0 != self && !seen[$0]++'
+}
+# a broker answers where OpenMower's does
+os_broker() {
+  mqtt mowbite/updater > /dev/null
+  case $? in 0 | 27) return 0 ;; esac
+  return 1
+}
+os_broker_left() {
+  os_broker || return 1
+  log "os: a broker still answers at ${MQTT_HOST:-127.0.0.1}:${MQTT_PORT:-1883}"
+}
+# OpenMower's containers stopped, each one's restart policy and whether it ran noted first, set to no, the brokers
+# last. right before, while OpenMower runs: the hold, the dock, the schedule. afterwards no broker may answer there
+os_stop() {
+  local list c x at why=
+  progress os stop
+  if running "$OM"; then
+    if [ -z "$held" ] && ! hold openmower; then
+      why=hold
+    elif ! docked; then
+      why=not_docked
+    elif at=$(soon); then
+      why="schedule $at"
+    fi
+  fi
+  if [ -n "$why" ]; then
+    unhold
+    if [ -n "$(get os_ran)" ]; then
+      os_undo error "$why"
+    else
+      os_off
+      log "os: OpenMower stays ($why)"
+      # shellcheck disable=SC2086
+      outcome os error $why
+    fi
+    return 1
+  fi
+  list=$(get os_ran)
+  if [ -z "$list" ]; then
+    for c in $(os_boxes); do
+      list="$list $c:$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$c" 2> /dev/null | grep . || echo no):$(running "$c" && echo running || echo stopped)"
+    done
+    # shellcheck disable=SC2086
+    status os_ran $list
+  fi
+  # (the brokers last)
+  for c in $(for x in $list; do case $(ref_of "${x%%:*}") in *mosquitto*) echo "1 ${x%%:*}" ;; *) echo "0 ${x%%:*}" ;; esac; done | sort -s -k1,1 | cut -d' ' -f2); do
+    exists "$c" || continue
+    docker update --restart=no "$c" > /dev/null 2>&1 && timeout $T_UP docker stop "$c" > /dev/null 2>&1 && ! running "$c" ||
+      { log "os: $c can't be stopped"; why=stop; break; }
+  done
+  # (OpenMower's broker is gone, its hold with it: nothing to take back on the OS's)
+  held=
+  [ -n "$why" ] || ! os_broker_left || why=broker
+  if [ -n "$why" ]; then
+    os_undo error "$why"
+    return 1
+  fi
+  log "os: OpenMower stopped"
+  if [ -n "$(get os_drop)" ]; then status switch_os os drop; else status switch_os os start; fi
+}
+# drop: OpenMower's container and the builds on it removed (noted before), its image and what's built on it deleted,
+# the build cache and what nothing uses cleared. its way back looked at once more while it's still there
+os_drop() {
+  local p c i x
+  progress os drop
+  # shellcheck disable=SC2046
+  set -- $(get os_drop)
+  if exists "$OM" && ! in_registry "$1"; then
+    log "os: $1 can't be had from its registry right now, nothing deleted"
+    os_undo error registry
+    return 1
+  fi
+  for p in $(noted) openmower; do
+    c=$(get "gone_$p" | cut -d' ' -f1)
+    [ -n "$c" ] && exists "$c" || continue
+    box_rm "$c" || { log "os: $c can't be removed"; os_undo error stop; return 1; }
+  done
+  shift 2
+  for i in 1 2; do for x in "$@"; do drop_image "$x"; done; done
+  os_clear
+  status switch_os os pull
+}
+# the OS's stack in its folder next to the others, with their owner, started with its profile: its broker and the OS
+os_start() {
+  local dir f own
+  progress os start
+  dir=$(os_dir)
+  if [ -d "$STATE/os.new" ]; then
+    own=$(stat -c %u:%g "$(stacks_root)")
+    mkdir -p "$dir/export" && chown "$own" "$dir" "$dir/export" || { os_undo rolled_back start; return 1; }
+    for f in compose.yaml mosquitto.conf env.example .env; do
+      cp "$STATE/os.new/$f" "$dir/.$f.new" && chown "$own" "$dir/.$f.new" && mv "$dir/.$f.new" "$dir/$f" ||
+        { rm -f "$dir/.$f.new"; os_undo rolled_back start; return 1; }
+    done
+    rm -rf "$STATE/os.new"
+  fi
+  status os_stack "$(os_compose $T_REGISTRY "$dir" config 2> /dev/null | sed -n 's/^name: *//p' | head -n1)"
+  if [ -z "$(get os_stack)" ] || ! os_compose $T_UP "$dir" up -d --pull never --no-build >> "$LOG" 2>&1; then
+    log "os: compose couldn't start MowBite OS"
+    os_undo rolled_back start
+    return 1
+  fi
+  status switch_os os wait
+}
+# a container of the OS's stack by its service
+os_box() { docker ps -a --filter "label=com.docker.compose.project=$(get os_stack)" --filter "label=com.docker.compose.service=$1" --format '{{.Names}}' 2> /dev/null | head -n1; }
+# system.info over its rpc says MowBite OS on the NX60i
+os_info() {
+  local id out pid n=0 rc=1
+  id="mowbite-updater-$$-$(now)"
+  out=$(mktemp)
+  set -- -h "${MQTT_HOST:-127.0.0.1}" -p "${MQTT_PORT:-1883}"
+  [ -n "$MQTT_USER" ] && [ ! -s "$MQTT_OPTS" ] && set -- "$@" -u "$MQTT_USER" -P "$MQTT_PASSWORD"
+  timeout 15 mosquitto_sub "$@" -t rpc/response -t rpc/error -W 12 > "$out" 2> /dev/null &
+  pid=$!
+  sleep 1
+  timeout 10 mosquitto_pub "$@" -t rpc/request -m "{\"jsonrpc\":\"2.0\",\"method\":\"system.info\",\"params\":{},\"id\":\"$id\"}" 2> /dev/null
+  while [ $n -lt 10 ] && ! grep -qF "\"$id\"" "$out"; do
+    sleep 1
+    n=$((n + 1))
+  done
+  kill "$pid" 2> /dev/null
+  wait "$pid" 2> /dev/null
+  grep -F "\"$id\"" "$out" | tr -d ' \t' | grep '"name":"mowbite-os"' | grep -q '"platform":"nx60i"' && rc=0
+  rm -f "$out"
+  return $rc
+}
+# the OS seen running: its container on its image, healthy (unhealthy or a halt in its health's or its own log: not),
+# system.info answering, a fresh robot_state from it, and OS_CALM seconds after the first one none of the bits that keep
+# it stopped. os_why what it didn't do
+os_seen() {
+  local c img end s first='' info='' bits h
+  img=$(get os_image | cut -d' ' -f2)
+  end=$(($(up) + OS_WAIT))
+  os_why=start
+  while [ "$(up)" -lt "$end" ] || { [ -n "$first" ] && [ "$(up)" -lt $((first + OS_CALM + 20)) ]; }; do
+    sleep 10
+    progress os wait
+    c=$(os_box os)
+    [ -n "$c" ] && [ "$(image_of "$c")" = "$img" ] && running "$c" || continue
+    if { docker inspect -f '{{if .State.Health}}{{range .State.Health.Log}}{{.Output}}{{end}}{{end}}' "$c"; docker logs --tail 200 "$c"; } 2>&1 | grep -q MOWBITE_OS_HALT; then
+      os_why=halt
+      return 1
+    fi
+    h=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$c" 2> /dev/null)
+    [ "$h" != unhealthy ] || { os_why=health; return 1; }
+    [ "$h" = healthy ] || { os_why=health; continue; }
+    [ -n "$info" ] || { os_info && info=1; } || { os_why=info; continue; }
+    s=$(mqtt robot_state/json)
+    [ -n "$s" ] || { os_why=state; continue; }
+    [ -n "$first" ] || first=$(up)
+    [ $(($(up) - first)) -ge "$OS_CALM" ] || continue
+    bits=$(printf '%s' "$s" | sed -n 's/.*"emergency_reason": *\([0-9]*\).*/\1/p')
+    [ $((${bits:-0} & OS_BITS)) -eq 0 ] && return 0
+    os_why=emergency
+    return 1
+  done
+  return 1
+}
+os_wait() {
+  if os_seen; then
+    status switch_os
+    status os_switch on "$(now)"
+    log "os: MowBite OS runs on the mower ($(get os_image | cut -d' ' -f1)), OpenMower stopped"
+    outcome os switched "$(now)" "$(get os_image | cut -d' ' -f4)"
+    return 0
+  fi
+  log "os: MowBite OS didn't run as it should ($os_why)"
+  os_undo rolled_back "$os_why"
+}
+# the way there given up: the OS stopped where it started, OpenMower's containers back as they were. $1 rolled_back (it
+# had come up) or error, $2 why. OpenMower not back: noted as the way back's, a tap on its card goes on
+os_undo() {
+  log "os: back to OpenMower ($2)"
+  progress os back
+  if os_down && os_om_make && os_om_up; then
+    os_off
+    outcome os "$1" "$2"
+    return 0
+  fi
+  status switch_os openmower stop old
+  log "os: OpenMower didn't come back, a tap on its card goes on"
+  outcome os error back
+  return 1
+}
+# the OS's stack stopped, not its data_dir, its restart policy as it is (stopped it stays so, compose starts it on the
+# next way there). 1 while one of its containers runs
+os_down() {
+  local name
+  name=$(get os_stack)
+  [ -n "$name" ] || return 0
+  progress os stop
+  [ ! -f "$(os_dir)/compose.yaml" ] || os_compose $T_UP "$(os_dir)" stop >> "$LOG" 2>&1
+  if [ -n "$(docker ps -q --filter "label=com.docker.compose.project=$name" 2> /dev/null)" ]; then
+    log "os: MowBite OS can't be stopped"
+    return 1
+  fi
+}
+# with drop: OpenMower's container made again, not started, on its version from its registry by its digest under its tag
+os_om_make() {
+  # shellcheck disable=SC2046
+  set -- $(get os_drop)
+  [ -n "$1" ] && ! exists "$OM" || return 0
+  progress os back
+  log "os: downloading OpenMower's version again ($1)"
+  if with_progress os none pull_image "$1" && docker tag "$1" "$2" &&
+    compose $T_UP "$OM" up --no-start --no-deps --no-build --pull never "$(service "$OM")" >> "$LOG" 2>&1 && exists "$OM"; then
+    return 0
+  fi
+  log "os: OpenMower can't be made again"
+  return 1
+}
+# OpenMower's containers as they were before: their restart policies back, the ones that ran started, the brokers
+# first, OpenMower last with MowBite's schedule held and with drop the builds on it built first. seen running, else 1
+os_om_up() {
+  local pass x c w pol st rc n=0
+  progress os back
+  for pass in broker app openmower; do
+    if [ "$pass" = app ]; then
+      # (its broker up before anything asks it)
+      until os_broker || [ $n -ge 20 ]; do
+        sleep 1
+        n=$((n + 1))
+      done
+    elif [ "$pass" = openmower ]; then
+      # shellcheck disable=SC2046
+      [ -z "$(get os_drop)" ] || nokeep_build "$(get os_drop | cut -d' ' -f2)"
+      hold openmower || log "os: MowBite's schedule isn't held, OpenMower started all the same"
+    fi
+    for x in $(get os_ran); do
+      c=${x%%:*}
+      pol=${x#*:}
+      st=${pol#*:}
+      pol=${pol%%:*}
+      if [ "$c" = "$OM" ]; then w=openmower; else case $(ref_of "$c") in *mosquitto*) w=broker ;; *) w=app ;; esac; fi
+      [ "$w" = "$pass" ] && exists "$c" || continue
+      docker update --restart="$pol" "$c" > /dev/null 2>&1 || log "os: $c keeps the restart policy no"
+      [ "$st" = running ] || continue
+      docker start "$c" > /dev/null 2>&1 || log "os: $c can't be started"
+    done
+  done
+  seen openmower "$(image_of "$OM")"
+  rc=$?
+  [ -z "$(get os_drop)" ] || nokeep_seen
+  unhold
+  [ $rc -eq 0 ] || log "os: OpenMower doesn't answer"
+  return $rc
+}
+# its notes gone, OpenMower there again (the stack's name stays: it's the updater's). a build not there again keeps its
+# note, built when the mower is still
+os_off() {
+  local p
+  for p in $(noted); do exists "$(box "$p")" && status "gone_$p"; done
+  exists "$OM" && status gone_openmower
+  for p in switch_os os_ran os_drop os_image os_env os_data; do status "$p"; done
+  rm -rf "$STATE/os.new"
+}
+
+# the OS's map for OpenMower: exported into the stack's export folder (map.json, report.json with what OpenMower can't
+# take: lost), map then. 2 from it (the mower isn't idle): nothing changed. else (the OS doesn't run, its export fails)
+# OpenMower's data as before the way there, old
+os_export() {
+  local dir c rc how=old
+  progress os export
+  dir=$(os_dir)/export
+  rm -f "$dir/map.json" "$dir/report.json"
+  c=$(os_box os)
+  if [ -n "$c" ] && running "$c"; then
+    timeout 60 docker exec "$c" mowbite-migrate export /export >> "$LOG" 2>&1
+    rc=$?
+    case $rc in
+    0)
+      if head -c 64 "$dir/map.json" 2> /dev/null | tr -d ' \t\r\n' | grep -q '^{'; then
+        how=map
+        tr -d ' \t\r\n' < "$dir/report.json" 2> /dev/null | grep -qF '"lost":[]' || how="map lost"
+      else
+        log "os: its export has no map"
+      fi
+      ;;
+    2)
+      log "os: MowBite OS isn't idle, it stays"
+      status switch_os
+      outcome os error busy
+      return 1
+      ;;
+    *) log "os: its export failed ($rc), OpenMower keeps its map from before" ;;
+    esac
+  else
+    log "os: MowBite OS doesn't run, OpenMower keeps its map from before"
+  fi
+  # shellcheck disable=SC2086
+  status switch_os openmower stop $how
+}
+# map: OpenMower's map.json from the OS's export, what it has now kept first. old: as it was before the way there (the
+# OS had it read-only)
+os_data() {
+  local how
+  how=$(get switch_os | cut -d' ' -f3-)
+  progress os back
+  if [ "${how%% *}" = map ]; then
+    if keep_data openmower put "$(get os_data)" && data_run "$(mount_at "$OM" /data/ros map.json)" swap 1 "$(os_dir)/export" > /dev/null 2>> "$LOG"; then
+      log "os: OpenMower's map.json from MowBite OS's export"
+    else
+      log "os: OpenMower's map.json can't take MowBite OS's export, it stays as before the switch"
+      how=old
+    fi
+  fi
+  # shellcheck disable=SC2086
+  status switch_os openmower start $how
+}
+os_om_back() {
+  local how
+  how=$(get switch_os | cut -d' ' -f3-)
+  if ! os_om_up; then
+    outcome os error back
+    return 1
+  fi
+  os_off
+  log "os: back on OpenMower"
+  # shellcheck disable=SC2086
+  outcome os back "$(now)" ${how:-old}
 }
 
 # --- a calibration: values measured on the mower written into OpenMower's mower_params.yaml ---
@@ -2987,6 +3650,7 @@ check_all() {
     status disk_free "$(free_mb)"
     # (what a calibration may write there, for apps)
     calib_look
+    os_look
     status checked "$(now)"
     looked=$(now)
     half=
@@ -3023,6 +3687,11 @@ run() {
   for p in $parts; do
     # (built on OpenMower's new version in this run already)
     case " $rebuilt " in *" $p "*) continue ;; esac
+    # (OpenMower and what stopped with it are left alone next to MowBite OS)
+    if os_parked "$p"; then
+      outcome "$p" error os
+      continue
+    fi
     # (asked for: a part left as it was says why on its card. OpenMower's update without a copy looks for itself)
     if ! nokeep_open "$p" && ! gate_ok "$(gate "$p")"; then
       waited=1
@@ -3087,7 +3756,7 @@ nokeep_due() {
 # every NOKEEP_EVERY. one that failed only while OpenMower doesn't answer, without it nothing runs
 gone_due() {
   local p
-  ! nokeep_busy && [ "$(now)" -ge "${gone_next:-0}" ] || return 0
+  ! nokeep_busy && ! os_busy && [ "$(now)" -ge "${gone_next:-0}" ] || return 0
   for p in $(gone_builds); do
     [ "$(get "$p")" != "error gone" ] || [ "$(mower)" = "0 unknown" ] && printf '%s ' "$p"
   done
@@ -3163,6 +3832,8 @@ status looking
 alive
 find_parts
 recover
+# (on the way to MowBite OS or back when it stopped: on from there)
+[ -z "$(get switch_os)" ] || alone os os_resume
 rest_after_self
 check_all
 # (the night it ran last, also through a restart in its window: its own update came before it)
@@ -3193,6 +3864,7 @@ while :; do
     self=""
     calib_req=""
     nokeep=""
+    switch=""
     while read -r w a b; do
       case $w in
       check) check=1 ;;
@@ -3205,8 +3877,14 @@ while :; do
         ;;
       self) self=1 ;;
       # (OpenMower without a copy of the version that runs, checked by the interface: only one that's offered)
-      nokeep) [ "$(kind "$a")" = openmower ] && nokeep=1 ;;
+      nokeep) [ "$(kind "$a")" = openmower ] && ! os_busy && nokeep=1 ;;
+      # (to MowBite OS or back, checked by the interface: only what its status offers)
+      switch) case $a in os | openmower) switch=$a ;; esac ;;
       back)
+        if os_parked "$a"; then
+          outcome "$a" error os
+          continue
+        fi
         case $(kind "$a") in
         image | openmower)
           if [ "$(gate "$a")" = none ] || nokeep_open "$a" || docked; then
@@ -3223,7 +3901,9 @@ while :; do
         ;;
       # (a part's data kept at $b back, idle in the dock like an update)
       data)
-        if docked; then
+        if os_parked "$a"; then
+          outcome "$a" error os
+        elif docked; then
           alone "$a" put_by_hand "$a" "$b"
         else
           log "$a: its data isn't put back, the mower isn't idle in the dock"
@@ -3239,6 +3919,11 @@ while :; do
     done < "$REQ.$$"
     rm -f "$REQ.$$"
     [ -z "$calib_req" ] || calib "$calib_req"
+    if [ -n "$switch" ]; then
+      alone os os_switch "$switch"
+      tidy
+      check_all
+    fi
     # itself first, its newest version updates the rest: that waits meanwhile (after_self) for the version that runs
     # next, the new one or this one put back. still here: nothing new of itself, the rest right away
     if [ -n "$self" ]; then

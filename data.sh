@@ -8,6 +8,8 @@
 #                              short unpacks without a word), moved over it, then read again against them. done
 #                              again from the start it ends the same (a stop halfway)
 #   data.sh schema <n> <piece> the number in the piece's schema file, 1 without one (the format before it had one)
+#   data.sh swap <n> <piece>   /b/<piece> (an export) moved over the piece with the owner and mode of the one there,
+#                              only a file that isn't empty and starts with {
 set -u
 # (unpacked here first: on the same disk, so it's moved over and not copied)
 STAGE=.updater-put
@@ -66,6 +68,16 @@ put)
   rm -rf "$STAGE"
   sync
   sums "$piece" | cmp -s - "/b/$n.sums" || { echo "data.sh: $piece isn't what was kept" >&2; exit 1; }
+  ;;
+swap)
+  [ -f "/b/$piece" ] && [ ! -L "/b/$piece" ] && head -c 64 "/b/$piece" | tr -d ' \t\r\n' | grep -q '^{' || { echo "data.sh: no export of $piece" >&2; exit 1; }
+  [ ! -L "$piece" ] && { [ -f "$piece" ] || [ ! -e "$piece" ]; } || { echo "data.sh: $piece isn't a file" >&2; exit 1; }
+  if [ -f "$piece" ]; then own=$(stat -c %u:%g "$piece") mode=$(stat -c %a "$piece"); else own=$(stat -c %u:%g .) mode=644; fi
+  rm -rf "$STAGE" && mkdir "$STAGE" && cp "/b/$piece" "$STAGE/$piece" && chown "$own" "$STAGE/$piece" && chmod "$mode" "$STAGE/$piece" &&
+    mv "$STAGE/$piece" "$piece" || { rm -rf "$STAGE"; exit 1; }
+  rm -rf "$STAGE"
+  sync
+  cmp -s "/b/$piece" "$piece" || { echo "data.sh: $piece isn't the export" >&2; exit 1; }
   ;;
 schema) schema "$piece" ;;
 *) exit 1 ;;
