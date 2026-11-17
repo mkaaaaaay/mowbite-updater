@@ -49,8 +49,8 @@ bad() {
 # the mower as the publisher sends it every second: docked (idle, charging) or out (mowing)
 mower() {
   case $1 in
-  docked) echo '{"current_state":"IDLE","is_charging":true}' > "$WORK/state/robot_state.json" ;;
-  out) echo '{"current_state":"MOWING","is_charging":false}' > "$WORK/state/robot_state.json" ;;
+  docked) echo '{"current_state":"IDLE","is_charging":true,"battery_percentage":0.9}' > "$WORK/state/robot_state.json" ;;
+  out) echo '{"current_state":"MOWING","is_charging":false,"battery_percentage":0.9}' > "$WORK/state/robot_state.json" ;;
   esac
   sleep 2
 }
@@ -1372,7 +1372,7 @@ post calib=back > /dev/null
 until_true "s.get('calib', '').startswith('back')" 600 && cmp -s "$PF" "$WORK/params.orig" && ok "back: the file as it was, byte for byte" ||
   bad "back: $(val "s.get('calib')")"
 # idle but driven by hand (MowBite OS): busy like mowing, given up after its wait
-echo '{"current_state":"IDLE","current_sub_state":"DRIVING","is_charging":false}' > "$WORK/state/robot_state.json"
+echo '{"current_state":"IDLE","current_sub_state":"DRIVING","is_charging":false,"battery_percentage":0.9}' > "$WORK/state/robot_state.json"
 sleep 2
 post calib "$(printf 'll/services/diff_drive/ticks_per_m 2030\n')" > /dev/null
 until_true "s.get('calib', '').startswith('waiting') and s.get('mower') == '0 DRIVING'" 60 && ok "driven by hand: busy, it waits" ||
@@ -1666,7 +1666,7 @@ printf 'listener %s 127.0.0.1\nallow_anonymous true\npersistence false\n' "$MQTT
 printf '# made-up\nMOWBITE_OS_TAG=\nMOWBITE_DATUM_LAT=\nMOWBITE_DATUM_LONG=\nMOWBITE_DATUM_HEIGHT=\nMOWBITE_DATA_DIR=%s\n' "$WORK/osdata" > "$dir/env.example"
 {
   echo 'FROM eclipse-mosquitto:2'
-  echo "LABEL mbt.run=$P"
+  echo "LABEL mbt.run=$P mowbite.xcore.firmware.major=1"
   echo 'COPY --chmod=755 os.sh /os.sh'
   echo 'COPY --chmod=755 migrate /usr/local/bin/mowbite-migrate'
   echo 'COPY nx60i.compose.yaml mosquitto.conf env.example /usr/share/mowbite-os/mower/'
@@ -1695,6 +1695,14 @@ look_os "startswith('no datum')" && ok "not offered without the datum of its map
 sed -i '/^    gps:$/a\      datum_lat: 52.1\n      datum_long: 9.7\n      datum_height: 60.5' "$WORK/params/mower_params.yaml"
 look_os "endswith(' keep import')" && [ "$(said os_switch)" = yes ] &&
   ok "offered next to OpenMower's image, to import its data" || bad "the offer: $(val "s.get('os_switch')")"
+
+# (the battery under 50 %: nothing stopped)
+echo '{"current_state":"IDLE","is_charging":true,"battery_percentage":0.3}' > "$WORK/state/robot_state.json"
+sleep 2
+post switch=os > /dev/null
+until_true "s.get('os', '') == 'error battery 50'" 120 && [ "$(om_boxes)" = "$was" ] && ok "the battery under 50 %: nothing stopped" ||
+  bad "a low battery: $(val "s.get('os')"), $(os_boxes)"
+mower docked
 
 # (a halt in its health's log: OpenMower back as it was, the OS stopped)
 : > "$WORK/state/os-halt"
