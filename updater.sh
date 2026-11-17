@@ -361,9 +361,9 @@ find_parts() {
   mine=$(repo_of "$(ref_of "$ME")")
   # (one removed for OpenMower's update without a copy that's there again: its note goes, not while they're removed, nor
   # on the way to MowBite OS or back)
-  case $(get nokeep_openmower):$(get switch_os) in
-  rm\ *:* | *:?*) ;;
-  *) gone_list | while read -r x c; do exists "$c" && status "$x"; done ;;
+  case $(get nokeep_openmower) in
+  rm\ *) ;;
+  *) [ -n "$(get switch_os)" ] || gone_list | while read -r x c; do exists "$c" && status "$x"; done ;;
   esac
   # (left by a stop right before such an update started)
   if ! nokeep_busy; then

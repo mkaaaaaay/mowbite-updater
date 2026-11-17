@@ -836,7 +836,10 @@ set -- $(get openmower_missing)
 [ "$(get openmower)" = "error missing" ] && [ "$1" = 0 ] && [ "$2" -gt "$(cat /fake/now)" ] && [ "$3 $4 $5 $6 $7" = "new r/om:edge r/om@sha256:dom r/om:edge /stk" ] &&
   [ ! -e /fake/c/om ] || bad "nokeep: a download that failed: $(get openmower), $(get openmower_missing)"
 ! nokeep_due || bad "nokeep: missing, but a try due"
+# (the note of one that's there again goes, also while OpenMower's download is missing)
+status gone_mowbite mb x
 find_parts
+[ -z "$(get gone_mowbite)" ] || bad "nokeep: a note kept of one that's there: $(get nokeep_openmower)"
 case " $(get parts) " in *" openmower:om:openmower "*" planner:pl:build "*) ;; *) bad "nokeep: what's missing not a part any more: $(get parts)" ;; esac
 check_part openmower
 check_part planner
