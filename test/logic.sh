@@ -730,6 +730,15 @@ called '^compose -p projx --project-directory /stkx --env-file /stkx/.env -f /st
   with_progress openmower none sh -c 'echo "{\"error\":true,\"message\":\"manifest unknown\"}"; exit 1'
   [ "$(nokeep_never r/om:new)" = unknown ] || echo never >> /fake/calls
 )
+# a MowBite OS host: never held from here, also when it doesn't answer
+(
+  . /updater.sh
+  os_host() { true; }
+  om_brokers() { echo own; return 2; }
+  on_broker() { echo "pub $*" >> /fake/calls; }
+  hold planner && echo held >> /fake/calls
+)
+! called '^pub\|^held' || bad "hold on an os host: $(grep '^pub\|^held' /fake/calls | tr '\n' '|')"
 called '^compose -p projx --project-directory /stkx --env-file /stkx/.env -f /stkx/c.yaml -f /stkx/d.yaml up -d --no-deps --no-build --pull never --force-recreate svcx$' &&
   ! called '^never' || bad "nokeep: its restart or download from its note: $(grep '^compose\|^never' /fake/calls | tr '\n' '|')"
 # OpenMower's brokers: none to ask while it's gone for its update, as before otherwise

@@ -176,6 +176,11 @@ held=
 held_m=
 hold() {
   local b list
+  # (a MowBite OS host keeps its schedule itself: nothing retained on its broker from here)
+  if os_host; then
+    log "$1: a MowBite OS host, MowBite's schedule isn't held from here"
+    return 1
+  fi
   list=$(om_brokers)
   case $? in
   1)
