@@ -35,7 +35,9 @@ compose volume /etc/localtime
 compose volume /host/os-release
 compose volume /opt/stacks
 compose volume /var/run/docker.sock
+env HTTP_HOST
 env MOWBITE_CONTAINER
+env MOWBITE_ORIGINS
 env MOWBITE_OS_REPO
 env MQTT_HOST
 env MQTT_PASSWORD

@@ -4,7 +4,7 @@
 #   POST ?conf          lines "<key> <value>", each checked, the ones left out stay as they are: <part> (its channel:
 #                       beta or stable, OpenMower's tag), <part>_auto (0 or 1), at (HH:MM), days (daily or 1-7, commas),
 #                       picked (containers looked after besides the known and labelled ones, commas, or none), os
-#                       (the tag of MowBite OS's image: with it a switch to MowBite OS is offered)
+#                       (the tag of MowBite OS's image: with it a switch to MowBite OS is offered, none: not)
 #   POST ?now[=<part>]  update all parts (itself first) or one within the next minute
 #   POST ?back=<part>   a part from a registry back to the version before (OpenMower: the one before its last update,
 #                       from its registry again)
@@ -40,6 +40,35 @@ jstr() { tr -d '\000-\010\013-\037' | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/ /g'; }
 # (and it's woken up: it looks at once, not within the minute)
 request() { mkdir -p "$STATE" && echo "$1" >> "$REQ" && { kill -USR1 1 2> /dev/null || :; } && plain ok; }
 is_part() { valid "$1" "$ID" && part_ids | grep -qx "$1"; }
+# only on a name or address of the home network: a page elsewhere whose name it points at the mower (dns rebinding)
+# asks with that name. no Host (a program), localhost, private addresses (tailscale's too), names without a dot or with
+# a home network's ending, the hosts of MOWBITE_ORIGINS
+home_host() {
+  local h="${HTTP_HOST:-}" x
+  case $h in
+  \[*) h=${h#\[} && h=${h%%]*} ;;
+  *) h=${h%%:*} ;;
+  esac
+  case $h in
+  *[!A-Za-z0-9.:-]*) return 1 ;;
+  '' | localhost | ::1 | [fF][cCdD]*:* | [fF][eE][89aAbB]*:*) return 0 ;;
+  *.local | *.lan | *.home | *.home.arpa | *.internal | *.localdomain | *.fritz.box) return 0 ;;
+  esac
+  case $h in
+  *[!0-9.]*) ;;
+  127.* | 10.* | 192.168.* | 169.254.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].*) return 0 ;;
+  100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*) return 0 ;;
+  *) return 1 ;;
+  esac
+  for x in $(printf '%s' "${MOWBITE_ORIGINS:-}" | tr ',' ' '); do
+    x=${x#*://}
+    x=${x%%/*}
+    [ "$h" = "${x%%:*}" ] && return 0
+  done
+  case $h in *.* | *:*) return 1 ;; esac
+  return 0
+}
+home_host || { printf 'Status: 403 Forbidden\r\n'; plain 'not from the home network'; }
 case "$REQUEST_METHOD" in
 POST)
   case ${CONTENT_TYPE:-} in application/json*) ;; *) plain bad ;; esac
@@ -70,7 +99,7 @@ POST)
       done < "$CONF"
       keep at '([01][0-9]|2[0-3]):[0-5][0-9]'
       keep days '(daily|[1-7](,[1-7]){0,6})'
-      keep os "$TAG"
+      keep os "(none|$TAG)" | grep -vx 'os none'
       keep picked '(none|[A-Za-z0-9][A-Za-z0-9_.-]{0,63}(,[A-Za-z0-9][A-Za-z0-9_.-]{0,63}){0,40})'
       for id in $(part_ids); do
         keep "${id}_auto" '(0|1)'

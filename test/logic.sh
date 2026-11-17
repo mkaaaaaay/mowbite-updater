@@ -1367,6 +1367,22 @@ cgi switch=os
 cgi switch=openmower
 [ "$(cat "$REQ")" = "switch openmower" ] || bad "os: the way back not asked for: $(cat "$REQ")"
 rm -f "$REQ"
+# the OS's image set and cleared again
+posted() { printf '%s' "$1" | CONTENT_LENGTH=${#1} cgi conf; }
+posted 'os t2' && [ "$(conf os "")" = t2 ] && posted 'at 04:00' && [ "$(conf os "")" = t2 ] && posted 'os none' && [ -z "$(conf os "")" ] &&
+  [ "$(conf at "")" = 04:00 ] || bad "cgi: conf os not set and cleared: $(tr '\n' ' ' < "$CONF")"
+echo "os t1" > "$CONF"
+# only from the home network: asked under another name (dns rebinding) nothing
+asked() { rm -f "$REQ" && HTTP_HOST=$1 MOWBITE_ORIGINS=${2:-} cgi check && [ -s "$REQ" ]; }
+for h in evil.example.com evil.example.com:8083 8.8.8.8 '[2001:db8::1]:8083' 'a b' 192.168.1.5.example.com openmower.; do
+  ! asked "$h" || bad "cgi: asked under $h"
+done
+for h in '' localhost:8083 192.168.1.5:8083 172.20.0.1 10.0.0.2 100.100.1.2 '[::1]:8083' '[fd00::1]:8083' openmower:8083 mower.fritz.box; do
+  asked "$h" || bad "cgi: $h turned away"
+done
+asked mower.example.org:8083 'http://x.lan, https://mower.example.org' || bad "cgi: a host of MOWBITE_ORIGINS turned away"
+! asked mower.example.org 'https://other.example.org' || bad "cgi: a host not in MOWBITE_ORIGINS asked"
+rm -f "$REQ"
 
 # the way there: kept, pulled, stopped (the brokers last), the stack made, seen
 os_fresh
