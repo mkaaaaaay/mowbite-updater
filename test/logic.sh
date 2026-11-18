@@ -1131,7 +1131,8 @@ fw_json='{"a":"b","mowbite.xcore.firmware.major":"1","z":"2"}'
   id_of() { :; }
   [ "$(os_fw_major x)" = 1 ] || bad "os: the firmware major not read from the image's labels: $(os_fw_major x)"
   id_of() { return 1; }
-  fw_json='{"mowbite.xcore.firmware.major":"2"}'
+  # (its registry's answer indented over lines)
+  fw_json=$(printf '{\n  "a": "b",\n  "mowbite.xcore.firmware.major": "2"\n}')
   [ "$(os_fw_major x)" = 2 ] || bad "os: the firmware major not read from its registry: $(os_fw_major x)"
   id_of() { :; }
   for fw_json in '{"mowbite.xcore.firmware.major":""}' null '{"mowbite.xcore.firmware.minor":"1"}' '{"mowbite.xcore.firmware.major":"1a"}'; do

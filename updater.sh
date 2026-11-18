@@ -2107,7 +2107,7 @@ os_fw_major() {
   else
     timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format "{{json (index .Image \"linux/$(arch)\").Config.Labels}}" 2> /dev/null ||
       timeout $T_REGISTRY docker buildx imagetools inspect "$1" --format '{{json .Image.Config.Labels}}' 2> /dev/null
-  fi | awk -v k="\"$OS_FW_LABEL\":\"" '(i = index($0, k)) {s = substr($0, i + length(k)); sub(/".*/, "", s); print s; exit}' | grep -x '[0-9][0-9]*'
+  fi | tr -d ' \n' | awk -v k="\"$OS_FW_LABEL\":\"" '(i = index($0, k)) {s = substr($0, i + length(k)); sub(/".*/, "", s); print s}' | grep -x '[0-9][0-9]*'
 }
 # the board's firmware fits the OS: OpenMower runs on it (no FIRMWARE_INCOMPATIBLE, so it's OM_FW_MAJOR) and the OS's
 # image expects that one
