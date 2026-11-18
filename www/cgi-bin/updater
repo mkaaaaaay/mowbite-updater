@@ -41,7 +41,7 @@ jstr() { tr -d '\000-\010\013-\037' | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/ /g'; }
 request() { mkdir -p "$STATE" && echo "$1" >> "$REQ" && { kill -USR1 1 2> /dev/null || :; } && plain ok; }
 is_part() { valid "$1" "$ID" && part_ids | grep -qx "$1"; }
 # only on a name or address of the home network: a page elsewhere whose name it points at the mower (dns rebinding)
-# asks with that name. no Host (a program), localhost, private addresses (tailscale's too), names without a dot or with
+# asks with that name. no Host (a program), localhost (docker's host.docker.internal too), private addresses (tailscale's too), names without a dot or with
 # a home network's ending, the hosts of MOWBITE_ORIGINS
 home_host() {
   local h="${HTTP_HOST:-}" x
@@ -51,7 +51,7 @@ home_host() {
   esac
   case $h in
   *[!A-Za-z0-9.:-]*) return 1 ;;
-  '' | localhost | ::1 | [fF][cCdD]*:* | [fF][eE][89aAbB]*:*) return 0 ;;
+  '' | localhost | host.docker.internal | ::1 | [fF][cCdD]*:* | [fF][eE][89aAbB]*:*) return 0 ;;
   *.local | *.lan | *.home | *.home.arpa | *.internal | *.localdomain | *.fritz.box) return 0 ;;
   esac
   case $h in

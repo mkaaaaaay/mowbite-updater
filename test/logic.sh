@@ -1381,7 +1381,7 @@ asked() { rm -f "$REQ" && HTTP_HOST=$1 MOWBITE_ORIGINS=${2:-} cgi check && [ -s 
 for h in evil.example.com evil.example.com:8083 8.8.8.8 '[2001:db8::1]:8083' 'a b' 192.168.1.5.example.com openmower.; do
   ! asked "$h" || bad "cgi: asked under $h"
 done
-for h in '' localhost:8083 192.168.1.5:8083 172.20.0.1 10.0.0.2 100.100.1.2 '[::1]:8083' '[fd00::1]:8083' openmower:8083 mower.fritz.box; do
+for h in '' localhost:8083 host.docker.internal:8083 192.168.1.5:8083 172.20.0.1 10.0.0.2 100.100.1.2 '[::1]:8083' '[fd00::1]:8083' openmower:8083 mower.fritz.box; do
   asked "$h" || bad "cgi: $h turned away"
 done
 asked mower.example.org:8083 'http://x.lan, https://mower.example.org' || bad "cgi: a host of MOWBITE_ORIGINS turned away"
