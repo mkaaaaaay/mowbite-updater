@@ -1466,7 +1466,7 @@ function osPart() {
     body = [dim(tr('MowBite OS runs the mower since {when}. OpenMower is stopped, its data stays as it was.', {when: when(a)})),
       dim(tr('On the way back OpenMower gets the map from MowBite OS and is started and checked again. Only with the mower ready in the dock.')),
       S('os_drop') && dim(tr("OpenMower's version is downloaded again, that needs the internet.")),
-      S('os_safety') === 'check_failed' && h('p', {class: 'warn'},
+      S('os_safety') === 'check_failed' && h('p', {class: 'error'},
         tr("A safety check in MowBite OS's setup failed, so it won't drive on its own. OpenMower doesn't know this check and will mow again without it.")),
       go('switch:openmower', 'Back to OpenMower', 'Really go back?', 'switch=openmower')];
   } else if (offer === 'yes') {
