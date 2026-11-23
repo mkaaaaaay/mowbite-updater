@@ -1481,7 +1481,7 @@ update_openmower() {
     outcome openmower error schedule "$at"
     return 2
   fi
-  [ "$want" != edge ] && exists "$PLANNER" && log "openmower: $want has no OM_PLANNER=external, the MowBite Planner won't work with it"
+  older "${want#v}" 1.5.0 && exists "$PLANNER" && log "openmower: $want has no OM_PLANNER=external (from 1.5.0), the MowBite Planner won't work with it"
   # (the layers looked up once: for the room and the bar)
   layers "$target" > "$STATE/layers"
   need=$(need_mb "$target" "$before" "$STATE/layers")
