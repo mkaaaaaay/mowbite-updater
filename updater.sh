@@ -1079,6 +1079,11 @@ settle() {
 
 # --- an image from a registry ---
 
+# on stable, stable $2 older than $3 that runs (a beta after the last release): nothing to go to until a newer stable.
+# a build by its release ($2 its name, $3 release or branch)
+stable_older() { [ "$(channel "$1")" = stable ] && older "$2" "$3"; }
+release_older() { [ "$3" = release ] && stable_older "$1" "${2#v}" "$(get "$1_release" | sed 's/^v//')"; }
+
 # whether version $1 is older than $2 (1.3.0 before 1.4.0-beta.14 before 1.4.0): part by part, a pre-release before its
 # release. no when either isn't a version like that
 older() {
@@ -1119,7 +1124,7 @@ check_image() {
   if [ -n "$(newest_back "$1" "$repo" "$(image_of "$c")")" ]; then status "$1_back" yes; else status "$1_back" no; fi
   target=$(image_target "$1")
   # stable older than what runs (a beta after the last release): nothing to go to, it stays until a newer stable
-  if [ "$(channel "$1")" = stable ] && [ -n "$st" ] && older "$st" "$(version_of "$1")"; then
+  if [ -n "$st" ] && stable_older "$1" "$st" "$(version_of "$1")"; then
     status "$1_available" no "$target"
     status "$1_stable_older" "$st"
     return
@@ -1196,7 +1201,7 @@ update_image() {
   target=$(image_target "$p")
   [ -n "$target" ] || { log "$p: no stable release"; outcome "$p" error no_stable; return 1; }
   # never back to an older version by picking stable: that one stays until a newer stable is out
-  if [ "$(channel "$p")" = stable ] && older "${target##*:}" "$(version_of "$p")"; then
+  if stable_older "$p" "${target##*:}" "$(version_of "$p")"; then
     log "$p: stable ${target##*:} is older than $(version_of "$p") that runs, it stays as it is"
     outcome "$p" stable_older "${target##*:}"
     return 0
@@ -3417,6 +3422,8 @@ check_build() {
   if [ -z "${2:-}" ] || [ -z "$built" ]; then
     want=$(get "$1_release")
     status "$1_available" unknown "${3:-${want:-main}}"
+  elif release_older "$1" "$3" "$4"; then
+    status "$1_available" no "$3"
   elif [ "$2" = "$built" ] && base_same "$1" "$base"; then
     # (the same commit, now with a release's name: nothing to build, only the name)
     release_name "$1" "$3" "$4"
@@ -3441,7 +3448,7 @@ update_build() {
   # shellcheck disable=SC2086
   set -- "$1" $want
   # never back to an older release by picking stable, as with an image
-  if [ "$4" = release ] && [ "$(channel "$1")" = stable ] && older "${3#v}" "$(get "$1_release" | sed 's/^v//')"; then
+  if release_older "$1" "$3" "$4"; then
     log "$1: stable $3 is older than $(get "$1_release") that runs, it stays as it is"
     outcome "$1" stable_older "${3#v}"
     return 0

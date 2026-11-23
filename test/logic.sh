@@ -846,6 +846,11 @@ status planner_release v1.1.0-beta.2
 : > /fake/calls
 update_build planner
 [ "$(get planner)" = "stable_older 1.0.0" ] && ! called 'compose pl .* build' || bad "build: stable built back under a newer beta: $(get planner)"
+# (and not offered on its card)
+status planner_built 2222222222222222222222222222222222222222
+check_build planner
+[ "$(get planner_available)" = "no v1.0.0" ] || bad "build: stable older offered: $(get planner_available)"
+status planner_built "$C1"
 status planner_release v0.9.0
 update_build planner
 [ "$(get planner | cut -d' ' -f1)" != stable_older ] || bad "build: an older release kept from a newer stable: $(get planner)"
