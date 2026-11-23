@@ -132,8 +132,8 @@ const DE = {
   'Its data put back': 'Daten zurückgespielt',
   'Checking…': 'Prüfe…',
   'nothing new, it was up to date': 'nichts Neues, er war aktuell',
-  "With this version the MowBite Planner doesn't work: it needs two changes that are only in edge so far (OM_PLANNER=external and keeping the planner's settings per area).":
-    'Mit dieser Version funktioniert der MowBite-Planer nicht: Er braucht zwei Änderungen, die bisher nur in Edge sind (OM_PLANNER=external und das Behalten der Planer-Einstellungen pro Fläche).',
+  "With this version the MowBite Planner doesn't work: it needs two changes that OpenMower has from 1.5.0 (OM_PLANNER=external and keeping the planner's settings per area).":
+    'Mit dieser Version funktioniert der MowBite-Planer nicht: Er braucht zwei Änderungen, die OpenMower ab 1.5.0 hat (OM_PLANNER=external und das Behalten der Planer-Einstellungen pro Fläche).',
   "Edge changes often, an update at night can bring a new fault. Only when there's room for the old and the new version at once.":
     'Edge ändert sich oft, ein Update in der Nacht kann einen neuen Fehler mitbringen. Nur wenn Platz für die alte und die neue Version zugleich ist.',
   "This version was built on its own, it isn't the official one.": 'Diese Version wurde selbst gebaut, sie ist nicht die offizielle.',
@@ -780,6 +780,11 @@ function badge(p) {
   if (!BADGE[a]) return h('span', {class: 'badge'}, tr(a === 'unknown' && S('checked') ? 'Unknown' : 'Not checked yet'));
   return h('span', {class: 'badge' + (a === 'yes' || a === 'switch' ? ' new' : '')}, tr(BADGE[a]));
 }
+// an OpenMower version of its own below 1.5.0: without OM_PLANNER=external (edge and latest have it)
+const beforeExternal = (v) => {
+  const m = /^v?(\d+)\.(\d+)\./.exec(v || '');
+  return !!m && (+m[1] < 1 || (+m[1] === 1 && +m[2] < 5));
+};
 const SUB = {openmower: 'Runs the mower', mowbite: 'The app for the mower', planner: 'Plans the mowing lanes', updater: 'Keeps everything here up to date'};
 function head(p) {
   const sub = SUB[p.id] ? tr(SUB[p.id]) : S(p.id + '_picked') === 'yes' ? tr('Added by you') : null;
@@ -1546,8 +1551,8 @@ function partCard(p) {
     inLine(id),
     failedHere(id),
     resultLine(p),
-    p.kind === 'openmower' && st.conf.openmower !== 'edge' && PARTS().some((x) => x.id === 'planner') &&
-      h('p', {class: 'warn'}, tr("With this version the MowBite Planner doesn't work: it needs two changes that are only in edge so far (OM_PLANNER=external and keeping the planner's settings per area).")),
+    p.kind === 'openmower' && beforeExternal(st.conf.openmower) && PARTS().some((x) => x.id === 'planner') &&
+      h('p', {class: 'warn'}, tr("With this version the MowBite Planner doesn't work: it needs two changes that OpenMower has from 1.5.0 (OM_PLANNER=external and keeping the planner's settings per area).")),
     p.kind === 'openmower' && ['yes', 'switch'].includes(avail(id)) && lineChange(),
     p.kind === 'openmower' && missing(),
     p.kind === 'openmower' && state === 'nospace' && nokeepOffer(p),
