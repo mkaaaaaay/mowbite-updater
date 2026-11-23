@@ -77,9 +77,9 @@ status() {
   local key="$1" tmp
   shift
   [ -f "$STATUS" ] || : > "$STATUS"
-  tmp=$(mktemp "$STATUS.XXXXXX") || return 0
+  tmp=$(mktemp "$STATUS.XXXXXX") || return 1
   # (sed, not grep: busybox's grep doesn't say when it couldn't write)
-  if sed "/^$key /d" "$STATUS" > "$tmp" 2> /dev/null && { [ $# -eq 0 ] || echo "$key $*" >> "$tmp"; } 2> /dev/null; then mv "$tmp" "$STATUS"; else rm -f "$tmp"; fi
+  if sed "/^$key /d" "$STATUS" > "$tmp" 2> /dev/null && { [ $# -eq 0 ] || echo "$key $*" >> "$tmp"; } 2> /dev/null; then mv "$tmp" "$STATUS"; else rm -f "$tmp"; return 1; fi
 }
 get() { sed -n "s/^$1 //p" "$STATUS" 2>/dev/null | head -n1; }
 

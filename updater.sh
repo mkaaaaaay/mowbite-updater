@@ -2375,13 +2375,15 @@ os_back() {
   esac
   os_on
 }
-# on from its step, after a stop halfway too. each step notes the next or ends it. the OS still running at the stop
-# of the way back (on after a stop halfway): idle in the dock asked again and its map exported anew first
+# on from its step, after a stop halfway too. each step notes the next or ends it, one that can't be noted (a full
+# disk) stops it. the OS still running at the stop of the way back (on after a stop halfway): idle in the dock asked
+# again and its map exported anew first
 os_on() {
-  local c fresh=
+  local c was fresh=
   while :; do
-    # shellcheck disable=SC2046
-    set -- $(get switch_os)
+    was=$(get switch_os)
+    # shellcheck disable=SC2086
+    set -- $was
     case $1:$2 in
     os:pull) os_pull ;;
     os:stop) os_stop ;;
@@ -2399,15 +2401,20 @@ os_on() {
           return 1
         fi
         status switch_os openmower export
-        continue
+      else
+        os_down && ! os_broker_left && status switch_os openmower om ${3:+"$3"} ${4:+"$4"} || { outcome os error stop; false; }
       fi
-      os_down && ! os_broker_left && status switch_os openmower om ${3:+"$3"} ${4:+"$4"} || { outcome os error stop; false; }
       ;;
     openmower:om) os_om_make && status switch_os openmower data ${3:+"$3"} ${4:+"$4"} || { outcome os error back; false; } ;;
     openmower:data) os_data ;;
     openmower:start) os_om_back ;;
     *) return 0 ;;
     esac || return 1
+    if [ "$(get switch_os)" = "$was" ]; then
+      log "os: its next step can't be noted, it stops at $was"
+      outcome os error keep
+      return 1
+    fi
   done
 }
 # a stop halfway: before anything stopped the way there is given up, else on from its step

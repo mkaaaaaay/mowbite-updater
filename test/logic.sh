@@ -1739,6 +1739,22 @@ status switch_os openmower start old
 : > /fake/calls
 alone os os_resume
 [ "$(get os)" = "error back" ] && running mowbite-os && ! running om && ! called '^start om$' || bad "os: OpenMower started next to the OS: $(get os), $(policies)"
+# a step that can't be noted (a full disk): it stops, not the same step again and again
+os_fresh
+os_away
+status os_image r/os:t1 - 2174 import
+status switch_os os pull
+status os_ran x
+(
+  n=0
+  os_pull() {
+    n=$((n + 1))
+    [ $n -lt 5 ] || { : > /fake/looped; exit 3; }
+  }
+  os_on
+)
+[ ! -e /fake/looped ] && [ "$(get os)" = "error keep" ] && [ "$(get switch_os)" = "os pull" ] || bad "os: a step not noted, but: $(get os), looped $([ -e /fake/looped ] && echo yes)"
+rm -f /fake/looped
 fi
 
 [ $fails = 0 ]
