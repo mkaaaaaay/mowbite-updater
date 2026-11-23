@@ -98,7 +98,8 @@ Without a check it waits for Docker's own health check, or else half a minute wi
 ## Good to know
 
 - **OpenMower:** it switches between edge, release (`latest`) and the version in its `.env` and updates only the
-  OpenMower container. The MowBite Planner needs edge for now, the page warns you.
+  OpenMower container. The MowBite Planner needs OpenMower 1.5.0 or newer (`OM_PLANNER=external`), the page warns you
+  for an older version.
 - **OpenMower without room for two versions:** its card then offers to delete the version that runs first (and what's
   built on it, like the planner) and download the new one, only when you tap it. Until it runs the mower can't mow.
   If the new one doesn't start, the old one comes from its registry again. A download that fails is tried again every
@@ -106,6 +107,13 @@ Without a check it waits for Docker's own health check, or else half a minute wi
 - **OpenMower and its firmware:** a new OpenMower that keeps the motors off because the firmware is too old goes back
   to the version before by itself, its card says so. Run `openmower update-firmware`, then tap "Try again". Before an
   update to another version line (1.3 to 1.4) the card warns you.
+- **Calibration** from MowBite: the values go into `mower_params.yaml` with the mower idle in its dock (it waits up to
+  30 minutes for that), then OpenMower starts again on them. Only the known values within their bounds. The file before
+  is kept: "Back" puts it back the same way, and if OpenMower doesn't come up on new values the file goes back by itself.
+- **MowBite OS instead of OpenMower:** once the OS's image is set, its card offers the switch. With the mower idle in
+  its dock it keeps OpenMower's data, stops its containers, starts MowBite OS and waits until it runs, else OpenMower
+  comes back as it was. The way back goes the same way and takes the OS's map along.
+- **One updater per mower:** a second one on the same Docker waits until the first one is gone.
 - **OpenMowerOS 3:** there OpenMower updates with the system (`openmower update-os`). The updater leaves OpenMower alone
   and keeps the other apps up to date.
 - **Apps built from GitHub** (like the MowBite Planner): built again when GitHub has something new. The planner
@@ -166,6 +174,14 @@ network.
   zone `status.clock` (`+0100`)
 - `POST ?nokeep=openmower`: OpenMower without a copy of the version that runs, only while `status.openmower_nokeep`
   offers it (`yes ...`)
+- `POST ?switch=os`: MowBite OS in OpenMower's place, only while `status.os_switch` offers it (`yes`). `?switch=openmower`:
+  back to OpenMower, while it runs MowBite OS. The OS's image is set with the line `os <tag>` in `?conf` (`os none`: off)
+- `POST ?calib` with lines `<path> <value>`: a calibration into `mower_params.yaml`, only the paths and bounds in
+  `status.calib_paths`. `?calib=back`: the file before the last one back. `status.calib` says how it went
+- `POST ?containers`: the containers of your stacks into the GET's `containers` (name, stack, state, since, restarts,
+  image). `POST ?logs=<name>`: that container's last lines with passwords and logins out, then `GET ?logs`.
+  `POST ?restart=<name>`: a running one of that list started again (OpenMower only idle in its dock, never next to
+  MowBite OS, never the updater itself), `status.restarted` says how it went
 
 </details>
 
