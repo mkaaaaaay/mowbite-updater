@@ -2942,7 +2942,7 @@ calib() {
     if [ "$1" = back ]; then status calib back "$(now)"; else status calib written "$(now)"; fi
   else
     log "calibration: OpenMower didn't answer on it, back to the file before"
-    [ "$1" = back ] || calib_run back > /dev/null
+    if [ "$1" = back ]; then calib_run undo; else calib_run back; fi > /dev/null
     docker restart "$OM" > /dev/null 2>&1 && rehold && seen openmower "$img"
     calib_look
     status calib error "$(now)" not_running

@@ -3,9 +3,11 @@
 # with only the file's folder at /p (no network, no docker): the values asked for and nothing else, the rest of the file
 # byte for byte. write: a copy of the file before as <file>.mowbite-<unix> (the newest 2 kept), the new one written next
 # to it with its owner and mode, renamed over it and read again to see it's what was meant. back: the newest copy put
-# back the same way. read: the values of the paths as the file has them. a path is its keys joined by / (ll/services/x)
+# back the same way, the file before it kept as .<file>.mowbite-before. undo: that one put back. read: the values of
+# the paths as the file has them. a path is its keys joined by / (ll/services/x)
 #   calib.sh write <file> <path> <value> [<path> <value> ...]   "ok <path> <old> <new>" a line, then "backup <name>"
 #   calib.sh back <file>                                         "back <name>"
+#   calib.sh undo <file>                                         "undo"
 #   calib.sh read <file> <path> [<path> ...]                     "<path> <value>" for each one it has, "backup <name>"
 #                                                                for the newest copy when there is one
 # "refused <why>" and 1 when it can't: a file it doesn't know how to change safely is left as it is
@@ -142,9 +144,16 @@ back)
   last=$(newest)
   [ -n "$last" ] || { echo "refused no_backup"; exit 1; }
   new=".$file.mowbite-new"
+  cp -p "$file" ".$file.mowbite-before" || { echo "refused no_write"; exit 1; }
   cp -p "$last" "$new" && chown "$(stat -c '%u:%g' "$file")" "$new" && chmod "$(stat -c '%a' "$file")" "$new" &&
     mv -f "$new" "$file" || { rm -f "$new"; echo "refused no_write"; exit 1; }
   echo "back $last"
+  ;;
+undo)
+  [ -f ".$file.mowbite-before" ] || { echo "refused no_backup"; exit 1; }
+  new=".$file.mowbite-new"
+  cp -p ".$file.mowbite-before" "$new" && mv -f "$new" "$file" || { rm -f "$new"; echo "refused no_write"; exit 1; }
+  echo "undo"
   ;;
 *)
   echo "refused what"

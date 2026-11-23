@@ -226,6 +226,16 @@ kept_fresh() {
 }
 
 if [ "$only" != self ] && [ "$only" != nokeep ] && [ "$only" != os ]; then
+# --- a calibration put back: the file before it kept, undone to that ---
+mkdir -p /p
+printf 'll:\n  services:\n    diff_drive:\n      ticks_per_m: 1000\n' > /p/m.yaml
+sh /r/calib.sh write m.yaml ll/services/diff_drive/ticks_per_m 1200 > /dev/null || bad "calib: not written"
+sed -i 's/1200/1300/' /p/m.yaml
+[ "$(sh /r/calib.sh back m.yaml | cut -d' ' -f1)" = back ] && grep -q 'ticks_per_m: 1000' /p/m.yaml || bad "calib: not back: $(cat /p/m.yaml)"
+[ "$(sh /r/calib.sh undo m.yaml)" = undo ] && grep -q 'ticks_per_m: 1300' /p/m.yaml || bad "calib: the file before back not there again: $(cat /p/m.yaml)"
+set -- /p/m.yaml.mowbite-*
+[ $# = 1 ] || bad "calib: its copy before back taken as a backup: $*"
+rm -rf /p
 # --- kept ---
 fresh
 keep_data mowbite update || bad "MowBite's data not kept"
