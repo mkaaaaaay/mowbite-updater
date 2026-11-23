@@ -23,7 +23,7 @@ if ! compose 300 "$ME" up -d --no-deps --pull never "$svc" > /dev/null 2>&1; the
 fi
 # (its page asked inside it, on its own port: it answers with that start)
 answers() {
-  docker exec "$ME" sh -c 'wget -q -T 5 -O - "http://127.0.0.1:${PORT:-8083}/cgi-bin/updater"' 2> /dev/null | grep -qF "\"started\":\"$1 $new\""
+  timeout 20 docker exec "$ME" sh -c 'wget -q -T 5 -O - "http://127.0.0.1:${PORT:-8083}/cgi-bin/updater"' 2> /dev/null | grep -qF "\"started\":\"$1 $new\""
 }
 state() { docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$ME" 2>/dev/null; }
 end=$(($(up) + 180))

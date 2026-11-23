@@ -34,6 +34,8 @@ cat > /fake/bin/docker << 'EOF'
 #!/bin/sh
 F=/fake
 echo "$*" >> $F/calls
+# (a daemon that hangs)
+[ -e $F/hang ] && sleep 10
 # (one that isn't there: an empty line and 1, as docker says it)
 c() { [ -d "$F/c/$1" ] || { echo; exit 1; }; cat "$F/c/$1/$2" 2> /dev/null; }
 # (a new start each time it's asked)
@@ -128,7 +130,12 @@ images)
   for f; do :; done
   cat "$F/rows/$(echo "$f" | tr / _)" 2> /dev/null
   ;;
-ps) ls $F/c ;;
+ps)
+  # (by a compose service: those with it in service)
+  s=$(printf '%s\n' "$@" | sed -n 's/^label=com.docker.compose.service=//p')
+  for n in $(ls $F/c); do [ -z "$s" ] || [ "$(cat "$F/c/$n/service" 2> /dev/null)" = "$s" ] && echo "$n"; done
+  ;;
+rename) mv "$F/c/$2" "$F/c/$3" ;;
 exec)
   [ -e $F/page ] || exit 1
   [ ! -e $F/page_until ] || [ "$(cat $F/clock)" -lt "$(cat $F/page_until)" ] || exit 1
@@ -451,6 +458,22 @@ echo x >> "/st/data/mowbite-$t/1.tar"
 : > /fake/calls
 put_by_hand mowbite "$t"
 [ "$(get mowbite)" = "error data_put" ] && ! called "^restart" && called "^unhold" || bad "a changed copy by hand: $(get mowbite)"
+
+# --- docker that hangs, an up cut short while compose makes it anew ---
+: > /fake/hang
+t0=$(date +%s)
+(T_UP=1; docker stop mb) 2> /dev/null
+rc=$?
+t1=$(date +%s)
+rm /fake/hang
+[ $rc != 0 ] && [ $((t1 - t0)) -lt 5 ] || bad "a docker that hangs: $rc after $((t1 - t0)) s"
+fresh
+(
+  compose() { mv /fake/c/mb /fake/c/1a2b_mb && echo svc > /fake/c/1a2b_mb/service; return 1; }
+  start_part mowbite
+) && bad "started though compose failed"
+[ -d /fake/c/mb ] && [ ! -e /fake/c/1a2b_mb ] && grep -q "found as 1a2b_mb" /st/log || bad "an up cut short: $(ls /fake/c)"
+rm -f /fake/c/mb/service
 
 # --- back to the version before by hand: the one it leaves noted before the restart, the note as it was when it fails ---
 fresh
@@ -1264,6 +1287,7 @@ os_away() {
 # the firmware major from the OS image's labels, here or in its registry
 fw_json='{"a":"b","mowbite.xcore.firmware.major":"1","z":"2"}'
 (
+  # shellcheck disable=SC2032
   timeout() {
     shift
     "$@"

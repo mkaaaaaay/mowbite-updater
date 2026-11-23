@@ -41,6 +41,9 @@ T_REGISTRY=60
 T_PULL=1800
 T_UP=300
 T_BUILD=900
+# (docker without a limit of its own: T_UP. xargs and timeout run docker itself)
+# shellcheck disable=SC2032
+docker() { timeout $T_UP docker "$@"; }
 
 alive() { status alive "$(now)"; }
 # what came of a part, for its card, and when (<part>_at)
@@ -598,7 +601,7 @@ backs() {
 drop_tag() {
   local r
   r=$(printf '%s\n' "$1" | awk '{sub(/^docker\.io\/library\//, ""); sub(/^docker\.io\//, ""); n = split($0, p, "/"); if (!index(p[n], ":")) $0 = $0 ":latest"; print}')
-  case " $(compose_refs | tr '\n' ' ') $(docker ps -aq | xargs -r docker inspect -f '{{.Config.Image}}' 2>/dev/null | tr '\n' ' ') " in
+  case " $(compose_refs | tr '\n' ' ') $(docker ps -aq | xargs -r timeout $T_UP docker inspect -f '{{.Config.Image}}' 2>/dev/null | tr '\n' ' ') " in
   *" $1 "* | *" $r "*) return 0 ;;
   esac
   docker rmi "$1" > /dev/null 2>&1 && log "removed $1, nothing uses it any more"
@@ -913,11 +916,22 @@ available() {
 restart() { start_part "$1" && seen "$1" "$2"; }
 # started, without a look whether it runs
 start_part() {
-  local force=
+  local c p s x force=
+  c=$(box "$1")
   progress "$1" restart
   # (one that runs an image that isn't there any more is made anew: compose takes it for the same and leaves it)
-  docker image inspect "$(image_of "$(box "$1")")" > /dev/null 2>&1 || force=1
-  compose $T_UP "$(box "$1")" up -d --no-deps --no-build --pull never ${force:+--force-recreate} "$(service "$(box "$1")")" >> "$LOG" 2>&1 || { log "$1: compose couldn't start it"; return 1; }
+  docker image inspect "$(image_of "$c")" > /dev/null 2>&1 || force=1
+  p=$(label "$c" project)
+  s=$(service "$c")
+  if ! compose $T_UP "$c" up -d --no-deps --no-build --pull never ${force:+--force-recreate} "$s" >> "$LOG" 2>&1; then
+    # (an up cut short while it makes it anew leaves it under another name)
+    if ! exists "$c" && [ -n "$p" ] && [ -n "$s" ]; then
+      x=$(docker ps -a --filter "label=com.docker.compose.project=$p" --filter "label=com.docker.compose.service=$s" --format '{{.Names}}' | head -n1)
+      [ -n "$x" ] && docker rename "$x" "$c" && log "$1: found as $x, named $c again"
+    fi
+    log "$1: compose couldn't start it"
+    return 1
+  fi
   rehold
 }
 seen() {
@@ -1286,7 +1300,7 @@ back_image() {
     return 0
   fi
   log "$p: the version before didn't answer, again the one that ran"
-  status "${p}_failed" $failed
+  status "${p}_failed" ${failed:+"$failed"}
   docker tag "$now_back" "$current"
   if restart "$p" "$before"; then
     docker rmi "$now_back" > /dev/null 2>&1
@@ -1638,7 +1652,7 @@ back_openmower() {
     return 0
   fi
   log "openmower: the version before didn't answer, again the one that ran"
-  status openmower_failed $failed
+  status openmower_failed ${failed:+"$failed"}
   docker tag "$back" "$ref"
   if restart openmower "$before"; then
     docker rmi "$back" > /dev/null 2>&1
@@ -1698,12 +1712,12 @@ nokeep_look() {
 }
 # the images with any of the layers $1 (ids)
 holders_of() {
-  docker images -aq --no-trunc 2>/dev/null | sort -u | xargs -r docker image inspect -f '{{.Id}} {{range .RootFS.Layers}}{{.}} {{end}}' 2>/dev/null |
+  docker images -aq --no-trunc 2>/dev/null | sort -u | xargs -r timeout $T_UP docker image inspect -f '{{.Id}} {{range .RootFS.Layers}}{{.}} {{end}}' 2>/dev/null |
     awk -v only=" $1" '{for (i = 2; i <= NF; i++) if (index(only, " " $i " ")) {print $1; next}}'
 }
 # the containers on any of the images $1, there or stopped
 boxes_on() {
-  docker ps -aq --no-trunc 2>/dev/null | xargs -r docker inspect -f '{{.Image}} {{.Name}}' 2>/dev/null |
+  docker ps -aq --no-trunc 2>/dev/null | xargs -r timeout $T_UP docker inspect -f '{{.Image}} {{.Name}}' 2>/dev/null |
     awk -v h=" $(printf '%s' "$1" | tr '\n' ' ') " 'index(h, " " $1 " ") {sub(/^\//, "", $2); print $2}'
 }
 # what a build on OpenMower's image is built from again once that's back, "<commit> <name> <how>": github's newest, else
@@ -3388,7 +3402,7 @@ function field(k,    v) {
   return v
 }'
 # the images the containers run on, there and stopped
-images_used() { docker ps -aq | xargs -r docker inspect -f '{{.Image}}' 2>/dev/null | tr '\n' ' '; }
+images_used() { docker ps -aq | xargs -r timeout $T_UP docker inspect -f '{{.Image}}' 2>/dev/null | tr '\n' ' '; }
 # one line per image: img <id> <bytes> <its tags, comma separated, or -> <kind>, then: cache <bytes> (what clearing it
 # frees: the entries no image shares). the way back of a part not seen running yet isn't listed
 check_room() {
