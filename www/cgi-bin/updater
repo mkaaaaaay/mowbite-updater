@@ -100,7 +100,15 @@ POST)
       keep at '([01][0-9]|2[0-3]):[0-5][0-9]'
       keep days '(daily|[1-7](,[1-7]){0,6})'
       keep os "(none|$TAG)" | grep -vx 'os none'
-      keep picked '(none|[A-Za-z0-9][A-Za-z0-9_.-]{0,63}(,[A-Za-z0-9][A-Za-z0-9_.-]{0,63}){0,40})'
+      # (only what's offered or picked before: never the mqtt broker)
+      v=$(pick picked '(none|[A-Za-z0-9][A-Za-z0-9_.-]{0,63}(,[A-Za-z0-9][A-Za-z0-9_.-]{0,63}){0,40})')
+      if [ -n "$v" ] && [ "$v" != none ]; then
+        v=$(printf '%s' "$v" | awk -F, -v ok=" $(get candidates) $(conf picked none | tr ',' ' ') " '
+          { for (i = 1; i <= NF; i++) if (index(ok, " " $i " ")) { printf "%s%s", s, $i; s = "," } }')
+        [ -n "$v" ] || v=none
+      fi
+      [ -n "$v" ] || v=$(conf picked "")
+      [ -z "$v" ] || echo "picked $v"
       for id in $(part_ids); do
         keep "${id}_auto" '(0|1)'
         if [ "$id" = openmower ]; then

@@ -407,7 +407,7 @@ find_parts() {
   sed -n 's/^\(c_[a-z0-9_]*_picked\) .*/\1/p' "$STATUS" 2>/dev/null | while read -r x; do status "$x"; done
   for c in $({
     docker ps -a --filter "label=$L=on" --format '{{.Names}}'
-    for x in $picked; do exists "$x" && echo "$x"; done
+    for x in $picked; do exists "$x" && case $(repo_of "$(ref_of "$x")") in *mosquitto*) ;; *) echo "$x" ;; esac; done
     gone_list | cut -d' ' -f2
   } | awk '!seen[$0]++'); do
     case $c in "$OM" | "$APP" | "$PLANNER" | "$ME") continue ;; esac

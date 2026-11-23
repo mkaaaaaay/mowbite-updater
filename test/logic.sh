@@ -762,6 +762,15 @@ status openmower_nokeep yes 201 planner r/om:edge -
 cgi nokeep=planner
 cgi nokeep=openmower
 [ "$(cat /fake/req 2> /dev/null)" = "nokeep openmower" ] || bad "nokeep: the interface took $(cat /fake/req 2> /dev/null | tr '\n' '|')"
+# picked: only what's offered or picked before
+status candidates "x1 x2"
+printf 'picked omq,x1' | CONTENT_LENGTH=13 cgi conf
+[ "$(conf picked)" = x1 ] || bad "picked: not only what's offered: $(conf picked)"
+status candidates "x2"
+printf 'picked x1,x2,x3' | CONTENT_LENGTH=15 cgi conf
+[ "$(conf picked)" = x1,x2 ] || bad "picked: one picked before or offered left out: $(conf picked)"
+printf 'picked omq' | CONTENT_LENGTH=10 cgi conf
+[ "$(conf picked)" = none ] || bad "picked: one not offered taken: $(conf picked)"
 # not offered when what holds the version that runs isn't known
 nk_fresh
 : > /fake/no_list
