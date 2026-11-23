@@ -627,7 +627,7 @@ data_run() {
   case $what in put | swap) mode=rw at=/b:ro ;; esac
   # shellcheck disable=SC2086
   docker run --rm --network none --pull never -v "${w%|*}:/s:$mode" ${dir:+-v "$dir:$at"} --entrypoint sh "$(image_of "$ME")" \
-    /data.sh "$what" "$n" "${w##*|}"
+    /data.sh "$what" "$n" "${w##*|}" "$ROOM_DATA"
 }
 # part $1's data before an update or before data is put back ($2: update or put): each piece as a tar read by a helper
 # of its own image that sees it read-only, with what it holds and the sha256 of all of it. the folder gets its name
@@ -651,6 +651,7 @@ keep_data() {
     case $? in
     0) printf '%s %s\n' "$i" "$w" >> "$tmp/what" ;;
     3) ;;
+    4) log "$1: not enough room to keep ${w##*|} ($(free_mb) MB free)"; bad=1 && break ;;
     *) bad=1 && break ;;
     esac
   done << EOF

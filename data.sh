@@ -2,8 +2,8 @@
 # a part's data kept before an update and put back, run by the updater in a helper container of its own image without
 # network, the data's folder or volume at /s (read-only, but to put back), a kept copy's folder at /o (to keep) or /b
 # (to put back, read-only). a piece is a file in /s by its name, or "." all of it
-#   data.sh keep <n> <piece>   <n>.tar of it in /o and <n>.sums, what the tar holds; <n>.schema for . with a schema
-#                              file. 3 when there's no such piece
+#   data.sh keep <n> <piece> [<MB>]  <n>.tar of it in /o and <n>.sums, what the tar holds; <n>.schema for . with a
+#                              schema file. 3 when there's no such piece, 4 without room in /o for it twice and <MB>
 #   data.sh put <n> <piece>    /b/<n>.tar unpacked next to the piece and checked against /b/<n>.sums (a copy cut
 #                              short unpacks without a word), moved over it, then read again against them. done
 #                              again from the start it ends the same (a stop halfway)
@@ -42,9 +42,15 @@ case $what in
 keep)
   [ -e "$piece" ] || [ -L "$piece" ] || exit 3
   [ "$piece" = . ] || [ ! -d "$piece" ] || { echo "data.sh: a folder only as ." >&2; exit 1; }
+  # (the tar and what it holds unpacked, both in /o)
+  size=$(du -sk -- "$piece" | cut -f1)
+  free=$(df -Pk /o/ | awk 'NR == 2 {print $4}')
+  [ -n "$size" ] && [ -n "$free" ] && [ $((size * 2 + ${4:-0} * 1024)) -le "$free" ] || { echo "data.sh: no room for $piece" >&2; exit 4; }
   tar -cf "/o/$n.tar" --numeric-owner --exclude "./$STAGE" -- "$piece" || exit 1
   # (what the tar holds, not the folder again: it may have changed meanwhile)
-  rm -rf /tmp/k && mkdir /tmp/k && tar -xf "/o/$n.tar" -C /tmp/k --numeric-owner && (cd /tmp/k && sums "$piece") > "/o/$n.sums" || exit 1
+  k=/o/.k$n
+  rm -rf "$k" && mkdir "$k" && tar -xf "/o/$n.tar" -C "$k" --numeric-owner && (cd "$k" && sums "$piece") > "/o/$n.sums" || { rm -rf "$k"; exit 1; }
+  rm -rf "$k"
   if [ -d "$piece" ] && [ -f "$piece/schema" ]; then schema "$piece" > "/o/$n.schema" || exit 1; fi
   ;;
 put)

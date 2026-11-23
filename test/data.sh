@@ -34,6 +34,7 @@ cd /w/s && echo 1 > schema && echo token > notify.conf && chmod 600 notify.conf 
 mkdir /w/s/.updater-put && echo half > /w/s/.updater-put/x
 at /w/s /w/o
 run keep 1 . || bad "a folder isn't kept"
+[ "$(ls -A /w/o | tr '\n' ' ')" = "1.schema 1.sums 1.tar " ] && [ ! -e /tmp/k ] || bad "left after keeping: $(ls -A /w/o) $(ls /tmp)"
 tar -tf /w/o/1.tar | grep -q updater-put && bad "what it unpacks into is kept too"
 rm -rf /w/s/.updater-put
 [ "$(cat /w/o/1.schema)" = 1 ] || bad "its schema isn't kept"
@@ -108,6 +109,11 @@ dd if=/dev/urandom of=/w/s/big bs=1k count=200 2> /dev/null
 at /w/s /small
 run keep 1 . 2> /dev/null && bad "kept on a full disk"
 rm /w/s/big
+at /w/s /w/o
+# (room for it twice and what's asked to spare, or nothing written)
+mkdir /w/r && at /w/s /w/r
+run keep 1 . 99999999 2> /dev/null
+[ $? = 4 ] && [ -z "$(ls -A /w/r)" ] || bad "kept without the room asked for: $(ls -A /w/r)"
 at /w/s /w/o
 run keep 9 . && ref=$(cat /w/o/9.sums)
 for k in $SIZES; do

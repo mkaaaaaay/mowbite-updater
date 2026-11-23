@@ -320,6 +320,9 @@ rm /fake/fail_keep_mower_params.yaml
 (free_mb() { echo 99; }; keep_data mowbite update) && bad "kept with less than 100 MB free"
 [ -z "$(ls /st/data 2> /dev/null)" ] && grep -q "not enough room to keep" /st/log || bad "no room: $(ls /st/data)"
 (free_mb() { echo 100; }; keep_data mowbite update) || bad "not kept with 100 MB free"
+fresh
+(ROOM_DATA=99999999; free_mb() { echo 999999999; }; keep_data mowbite update) && bad "kept without room for its data twice and the spare"
+[ -z "$(ls /st/data 2> /dev/null)" ] && grep -q "not enough room to keep \." /st/log || bad "no room for its data: $(ls /st/data)"
 
 # --- put back ---
 kept_fresh
