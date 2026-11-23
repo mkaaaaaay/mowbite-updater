@@ -1237,14 +1237,14 @@ os_compose() {
     for c in mowbite-os mowbite-mosquitto; do echo mbt-os > "/fake/c/$c/project"; echo "${c#mowbite-}" > "/fake/c/$c/service"; : > "/fake/c/$c/osl"; done
     echo os > /fake/c/mowbite-os/service
     ;;
-  *" stop "*) for c in mowbite-os mowbite-mosquitto; do [ ! -d "/fake/c/$c" ] || echo exited > "/fake/c/$c/status"; done ;;
+  *" stop "*) [ -e /fake/os_stop_fail ] || for c in mowbite-os mowbite-mosquitto; do [ ! -d "/fake/c/$c" ] || echo exited > "/fake/c/$c/status"; done ;;
   esac
 }
 # docker for the OS's steps: filters by the files project, service and osl, restart policies, health, logs, the
 # stack's files out of the image, the export. the rest as before (xargs runs the script)
 # shellcheck disable=SC2032
 docker() {
-  local c a p='' s='' q='' o='' img=''
+  local c a p='' s='' q='' o='' f='' img=''
   case $1 in
   ps)
     shift
@@ -1254,6 +1254,7 @@ docker() {
       label=com.docker.compose.service=*) s=${a#*=} s=${s#*=} ;;
       label=mowbite.os) o=1 ;;
       -q) q=1 ;;
+      *'"mowbite.os"'*) f=1 ;;
       esac
     done
     for c in /fake/c/*; do
@@ -1261,8 +1262,8 @@ docker() {
       [ -z "$p" ] || [ "$(cat "/fake/c/$c/project" 2> /dev/null)" = "$p" ] || continue
       [ -z "$s" ] || [ "$(cat "/fake/c/$c/service" 2> /dev/null)" = "$s" ] || continue
       [ -z "$o" ] || [ -e "/fake/c/$c/osl" ] || continue
-      [ -z "$q" ] || running "$c" || continue
-      echo "$c"
+      [ -z "$q$f" ] || running "$c" || continue
+      if [ -n "$f" ]; then echo "$c|$(cat "/fake/c/$c/ref")|$([ -e "/fake/c/$c/osl" ] && echo os)"; else echo "$c"; fi
     done
     ;;
   inspect)
@@ -1709,6 +1710,35 @@ mkdir -p "$STATE/os.new"
 echo "0 MOWING" > /fake/mower
 alone os os_resume
 [ "$(get os | cut -d' ' -f1)" = error ] && on_om && no_notes || bad "os: on while the mower drives: $(get os)"
+# the way back on from its stop with the OS still running: idle in the dock asked again, its map exported anew
+os_fresh
+os_away
+alone os os_switch os
+echo 0 > /fake/export
+echo '{"areas":["old"]}' > /fake/os_map
+echo '{"lost": []}' > /fake/os_report
+: > /fake/os_stop_fail
+alone os os_switch openmower
+rm /fake/os_stop_fail
+[ "$(get os)" = "error stop" ] && [ "$(get switch_os | cut -d' ' -f1,2)" = "openmower stop" ] && running mowbite-os || bad "os: a stop that failed on the way back: $(get os), $(get switch_os)"
+echo "0 MOWING" > /fake/mower
+: > /fake/calls
+alone os os_resume
+[ "$(get os)" = "error not_docked" ] && [ "$(get switch_os | cut -d' ' -f1,2)" = "openmower stop" ] && running mowbite-os && ! called '^stop' ||
+  bad "os: the OS stopped on the way back while the mower drives: $(get os), $(get switch_os)"
+echo 1 > /fake/mower
+echo '{"areas":["new"]}' > /fake/os_map
+alone os os_resume
+[ "$(get os | cut -d' ' -f1,3-)" = "back map" ] && on_om && no_notes && [ "$(cat /vol/ros/map.json)" = '{"areas":["new"]}' ] ||
+  bad "os: not back with the map exported anew: $(get os), $(cat /vol/ros/map.json)"
+# the OS running again before OpenMower starts: OpenMower stays off
+os_fresh
+os_away
+alone os os_switch os
+status switch_os openmower start old
+: > /fake/calls
+alone os os_resume
+[ "$(get os)" = "error back" ] && running mowbite-os && ! running om && ! called '^start om$' || bad "os: OpenMower started next to the OS: $(get os), $(policies)"
 fi
 
 [ $fails = 0 ]

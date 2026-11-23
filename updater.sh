@@ -2375,8 +2375,10 @@ os_back() {
   esac
   os_on
 }
-# on from its step, after a stop halfway too. each step notes the next or ends it
+# on from its step, after a stop halfway too. each step notes the next or ends it. the OS still running at the stop
+# of the way back (on after a stop halfway): idle in the dock asked again and its map exported anew first
 os_on() {
+  local c fresh=
   while :; do
     # shellcheck disable=SC2046
     set -- $(get switch_os)
@@ -2387,8 +2389,20 @@ os_on() {
     os:start) os_start ;;
     os:wait) os_wait ;;
     os:back) os_undo "$3" "$(get switch_os | cut -d' ' -f4-)" ;;
-    openmower:export) os_export ;;
-    openmower:stop) os_down && ! os_broker_left && status switch_os openmower om ${3:+"$3"} ${4:+"$4"} || { outcome os error stop; false; } ;;
+    openmower:export) fresh=1 && os_export ;;
+    openmower:stop)
+      c=$(os_box os)
+      if [ -z "$fresh" ] && [ -n "$c" ] && running "$c"; then
+        if ! docked; then
+          log "os: the mower isn't idle in the dock, MowBite OS stays"
+          outcome os error not_docked
+          return 1
+        fi
+        status switch_os openmower export
+        continue
+      fi
+      os_down && ! os_broker_left && status switch_os openmower om ${3:+"$3"} ${4:+"$4"} || { outcome os error stop; false; }
+      ;;
     openmower:om) os_om_make && status switch_os openmower data ${3:+"$3"} ${4:+"$4"} || { outcome os error back; false; } ;;
     openmower:data) os_data ;;
     openmower:start) os_om_back ;;
@@ -2703,6 +2717,11 @@ os_om_make() {
 os_om_up() {
   local pass p x c w pol st rc n=0
   progress os back
+  # (never two hosts on the board)
+  if os_host; then
+    log "os: MowBite OS runs again, OpenMower not started"
+    return 1
+  fi
   for pass in broker app openmower; do
     if [ "$pass" = app ]; then
       # (its broker up before anything asks it)
