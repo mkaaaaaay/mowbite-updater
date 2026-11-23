@@ -84,7 +84,7 @@ status() {
     status_set "$key" "$@"
   fi || return 1
   # (the notes a stop halfway goes on from: on the disk before the step they're for)
-  case $key in pending_* | changed_* | gone_* | nokeep_openmower | switch_os | os_drop | openmower_missing) sync ;; esac
+  case $key in pending_* | changed_* | gone_* | *_failed | nokeep_openmower | switch_os | os_drop | openmower_missing) sync "$STATUS" "${STATUS%/*}" ;; esac
 }
 status_set() {
   local key="$1" tmp

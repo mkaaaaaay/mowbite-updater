@@ -268,12 +268,13 @@ wait
 [ "$(grep -c '^w[ab][0-9]* ' "$STATUS")" = 80 ] || bad "status: lines lost by two writing at once: $(grep -c '^w[ab][0-9]* ' "$STATUS") of 80"
 sed -i '/^w[ab][0-9]* /d' "$STATUS"
 # --- the log as the page shows it: access out ---
-[ "$(printf 'a http://u:pw@h/x username: bob password: "p w" s3cr\n' | redact s3cr)" = 'a http://***:***@h/x username: *** password: "***" ***' ] ||
-  bad "redact: $(printf 'a http://u:pw@h/x username: bob password: "p w" s3cr\n' | redact s3cr)"
+r=$(printf 'a http://u:pw@h/x username: bob password: "p w" s3cr\n' | redact s3cr)
+[ "$r" = 'a http://***:***@h/x username: *** password: "***" ***' ] || bad "redact: $r"
 mkdir -p "$STATE"
 echo "2026-01-01 00:00:00 build: password=abc" >> "$LOG"
-REQUEST_METHOD=GET QUERY_STRING='' sh /r/www/cgi-bin/updater 2> /dev/null | grep -q "password=abc" && bad "redact: the log goes out as it is"
-REQUEST_METHOD=GET QUERY_STRING='' sh /r/www/cgi-bin/updater 2> /dev/null | grep -q "password=\*\*\*" || bad "redact: the log not there"
+r=$(REQUEST_METHOD=GET QUERY_STRING='' sh /r/www/cgi-bin/updater 2> /dev/null)
+! printf '%s' "$r" | grep -q "password=abc" || bad "redact: the log goes out as it is"
+printf '%s' "$r" | grep -q "password=\*\*\*" || bad "redact: the log not there"
 fresh
 keep_data mowbite update || bad "MowBite's data not kept"
 d=$(newest mowbite)
@@ -333,7 +334,8 @@ fresh
 mkdir -p /st/data/mowbite-5000 /st/data/mowbite-4000
 keep_data mowbite update
 [ "$kept" = /st/data/mowbite-5001 ] && [ -d "$kept" ] && [ "$(newest mowbite)" = "$kept" ] || bad "clock back: kept as $kept, the newest $(newest mowbite)"
-t=$(backs() { echo "rb-mowbite-5000-abcdefgh sha256:x"; }; keep_back r/mowbite sha256:mb mowbite)
+printf 'rb-mowbite-5000-abcdefgh sha256:x\nrb-4000-abcdefgh sha256:y\n' > /fake/rows/r_mowbite
+t=$(keep_back r/mowbite sha256:mb mowbite)
 [ "$t" = r/mowbite:rb-mowbite-5001-mb ] || bad "clock back: rollback tag $t"
 fresh
 (ROOM_DATA=99999999; free_mb() { echo 999999999; }; keep_data mowbite update) && bad "kept without room for its data twice and the spare"
@@ -503,21 +505,16 @@ fresh
 rm -f /fake/c/mb/service
 
 # --- back to the version before by hand: the one it leaves noted before the restart, the note as it was when it fails ---
+# (a restart that says what was noted when it came)
+noted_restart() { echo "restart $1 $(get "$1_failed")" >> /fake/calls; [ ! -e /fake/restart_fail ]; }
+img_back() { (newest_back() { echo rb-mowbite-1; }; restart() { noted_restart "$@"; }; back_image mowbite); }
 fresh
-(
-  newest_back() { echo rb-mowbite-1; }
-  restart() { echo "restart $1 $(get "$1_failed")" >> /fake/calls; [ ! -e /fake/restart_fail ]; }
-  back_image mowbite
-)
+img_back
 called "^restart mowbite sha256:mb" && [ "$(get mowbite | cut -d' ' -f1)" = back ] || bad "back by hand: not noted before the restart: $(grep ^restart /fake/calls)"
 fresh
 status mowbite_failed sha256:old
 : > /fake/restart_fail
-(
-  newest_back() { echo rb-mowbite-1; }
-  restart() { echo "restart $1 $(get "$1_failed")" >> /fake/calls; [ ! -e /fake/restart_fail ]; }
-  back_image mowbite
-)
+img_back
 called "^restart mowbite sha256:mb" && [ "$(get mowbite_failed)" = sha256:old ] || bad "back by hand that failed: $(get mowbite_failed)"
 # (OpenMower: its version before from the registry, not in the 30 minutes before the schedule)
 om_back() {
@@ -528,7 +525,7 @@ om_back() {
     free_mb() { echo 99999; }
     with_progress() { :; }
     rebuild_on_om() { :; }
-    restart() { echo "restart $1 $(get "$1_failed")" >> /fake/calls; [ ! -e /fake/restart_fail ]; }
+    restart() { noted_restart "$@"; }
     back_openmower
   )
 }

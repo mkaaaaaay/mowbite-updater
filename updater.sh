@@ -588,7 +588,8 @@ keep_change() {
 # the image part $3 ran before, kept under a tag of its own in its repository $1: rb-<part>-<time>-<image>
 keep_back() {
   local n t
-  n=$(backs "$3" "$1" | head -n1 | sed -E 's/^rb-([a-z][a-z0-9_]*-)?([0-9]+)-.*/\2/')
+  # (after all rollback tags of the repository)
+  n=$(docker images --format '{{.Tag}}' "$1" | sed -n 's/^rb-\([a-z][a-z0-9_]*-\)\{0,1\}\([0-9][0-9]*\)-.*/\2/p' | sort -n | tail -n1)
   t=$1:rb-$3-$(stamp "$n")-$(echo "$2" | sed 's/^sha256://' | cut -c1-8)
   docker tag "$2" "$t" && echo "$t"
 }
@@ -1291,10 +1292,18 @@ update_image() {
   return 1
 }
 
+# part $1's image $2 (of repository $3) left out before a restart by hand: a stop in between doesn't bring it back the
+# next night. the note there before in $failed, to put back when the restart fails
+leave_out() {
+  local d
+  failed=$(get "$1_failed")
+  d=$(digests_in "$2" "$3")
+  status "$1_failed" "$2" ${d:+"$d"}
+}
 # back to the version before, by hand: the newest rollback tag on another image, under the tag that runs now. what ran
 # is kept the same way and left out of the automatic updates. it comes back when the one before doesn't answer
 back_image() {
-  local p="$1" c current repo before to now_back d failed
+  local p="$1" c current repo before to now_back failed
   c=$(box "$p")
   current=$(ref_of "$c")
   repo=$(repo_of "$current")
@@ -1305,10 +1314,7 @@ back_image() {
   now_back=$(keep_back "$repo" "$before" "$p")
   [ -n "$now_back" ] || { outcome "$p" error keep; return 1; }
   log "$p: kept the version that ran as $now_back, back to $to"
-  # (left out before the restart: a stop in between doesn't bring it back the next night)
-  failed=$(get "${p}_failed")
-  d=$(digests_in "$before" "$repo")
-  status "${p}_failed" "$before" ${d:+"$d"} || { undo_back "$now_back" "$current"; outcome "$p" error keep; return 1; }
+  leave_out "$p" "$before" "$repo" || { undo_back "$now_back" "$current"; outcome "$p" error keep; return 1; }
   docker tag "$repo:$to" "$current"
   if restart "$p" "$(id_of "$repo:$to")"; then
     docker rmi "$repo:$to" > /dev/null 2>&1
@@ -1619,7 +1625,7 @@ update_openmower() {
 # its digest (openmower_prev) under the tag that runs, as long as the registry has it. the version that ran is left out
 # of the automatic updates, it runs again when the one before doesn't answer
 back_openmower() {
-  local ref repo before prev need free back d failed at
+  local ref repo before prev need free back failed at
   if nokeep_busy; then
     log "openmower: its update without a copy isn't done, that goes on first"
     outcome openmower error nokeep
@@ -1660,9 +1666,7 @@ back_openmower() {
   hold openmower || { undo_back "$back" "$ref"; outcome openmower error hold; return 1; }
   docked || { unhold; log "openmower: the mower left the dock, it stays as it is"; undo_back "$back" "$ref"; return 2; }
   log "openmower: kept the version that ran as $back, back to $prev"
-  failed=$(get openmower_failed)
-  d=$(digests_in "$before" "$repo")
-  status openmower_failed "$before" ${d:+"$d"} || { unhold; undo_back "$back" "$ref"; outcome openmower error keep; return 1; }
+  leave_out openmower "$before" "$repo" || { unhold; undo_back "$back" "$ref"; outcome openmower error keep; return 1; }
   docker tag "$prev" "$ref"
   if restart openmower "$(id_of "$prev")"; then
     unhold
@@ -1906,7 +1910,7 @@ nokeep_undo() {
   nokeep_off
 }
 # the build cache cleared (a test on a pc with builds of its own: PRUNE=0)
-prune_cache() { [ "${PRUNE:-1}" = 0 ] || timeout $T_UP docker builder prune -af > /dev/null 2>&1; }
+prune_cache() { [ "${PRUNE:-1}" = 0 ] || docker builder prune -af > /dev/null 2>&1; }
 # what holds the layers of the version before deleted (twice: an image built on another goes only after it), the build
 # cache cleared
 nokeep_drop() {
@@ -2324,7 +2328,7 @@ os_look() {
   [ -n "$dd" ] || dd=$(env_val "$(os_dir)/.env" MOWBITE_DATA_DIR)
   if os_kept "$dd"; then os_new=kept; else os_new=import; fi
   # shellcheck disable=SC2046
-  status os_deletes $(for x in $os_holders; do [ "$x" = "$img" ] || docker image inspect -f '{{join .RepoTags ","}}' "$x" 2> /dev/null | cut -d, -f1 | grep . || echo "${x#sha256:}" | cut -c1-12; done)
+  status os_deletes $(for x in $os_holders; do [ "$x" = "$img" ] || tags_of "$x" | cut -d' ' -f1 | grep . || echo "${x#sha256:}" | cut -c1-12; done)
   status os_switch yes "$mb" "$os_way" "$os_new"
 }
 
@@ -2449,7 +2453,7 @@ os_on() {
     os:drop) os_drop ;;
     os:start) os_start ;;
     os:wait) os_wait ;;
-    os:back) os_undo "$3" "$(get switch_os | cut -d' ' -f4-)" ;;
+    os:back) os_undo "$3" "$(printf '%s\n' "$was" | cut -d' ' -f4-)" ;;
     openmower:export) fresh=1 && os_export ;;
     openmower:stop)
       c=$(os_box os)
@@ -2604,7 +2608,7 @@ os_stop() {
   # (the brokers last)
   for c in $(for x in $list; do case $(ref_of "${x%%:*}") in *mosquitto*) echo "1 ${x%%:*}" ;; *) echo "0 ${x%%:*}" ;; esac; done | sort -s -k1,1 | cut -d' ' -f2); do
     exists "$c" || continue
-    docker update --restart=no "$c" > /dev/null 2>&1 && timeout $T_UP docker stop "$c" > /dev/null 2>&1 && ! running "$c" ||
+    docker update --restart=no "$c" > /dev/null 2>&1 && docker stop "$c" > /dev/null 2>&1 && ! running "$c" ||
       { log "os: $c can't be stopped"; why=stop; break; }
   done
   # (OpenMower's broker is gone, its hold with it: nothing to take back on the OS's)
@@ -3435,7 +3439,7 @@ check_room() {
   [ -n "${TEST_LABEL:-}" ] && only=" $(docker images -q --no-trunc --filter "label=$TEST_LABEL" | sort -u | tr '\n' ' ') "
   # (one look at docker's disk: the images, then the build cache)
   df=$(mktemp)
-  timeout $T_UP docker system df -v --format '{{json .Images}}\n{{json .BuildCache}}' > "$df" 2>/dev/null
+  docker system df -v --format '{{json .Images}}\n{{json .BuildCache}}' > "$df" 2>/dev/null
   # (next to the list it replaces: moved in place whole, its page never reads half of it)
   out=$(mktemp "$STATE/room.XXXXXX") || { rm -f "$df"; return; }
   sed -n 1p "$df" | sed 's/^\[//; s/\]$//; s/},{/}\n{/g' | awk -v used="$used" -v named="$named" -v only="$only" "$bytes_awk"'
@@ -3464,7 +3468,7 @@ room_free() {
   alive
   case $1 in
   cache)
-    timeout $T_UP docker builder prune -af > /dev/null 2>&1
+    docker builder prune -af > /dev/null 2>&1
     log "room: build cache cleared"
     ;;
   img | all)
@@ -3638,9 +3642,9 @@ tidy() {
   # (a test on a pc with images and builds of its own: PRUNE=0)
   if [ "${PRUNE:-1}" != 0 ]; then
     alive
-    freed=$(timeout $T_UP docker image prune -f 2>/dev/null | sed -n 's/^Total reclaimed space: //p')
+    freed=$(docker image prune -f 2>/dev/null | sed -n 's/^Total reclaimed space: //p')
     alive
-    cache=$(timeout $T_UP docker builder prune -f 2>/dev/null | sed -n 's/^Total: *//p')
+    cache=$(docker builder prune -f 2>/dev/null | sed -n 's/^Total: *//p')
   fi
   log "tidied up: images ${freed:-0B}, build cache ${cache:-0B}, $(free_mb) MB free"
 }
