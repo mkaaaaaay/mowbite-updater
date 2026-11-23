@@ -236,6 +236,19 @@ sed -i 's/1200/1300/' /p/m.yaml
 set -- /p/m.yaml.mowbite-*
 [ $# = 1 ] || bad "calib: its copy before back taken as a backup: $*"
 rm -rf /p
+# --- a stack's file changed: noted before it's in place, a stop in between leaves it as it was ---
+mkdir -p /cf
+printf 'VERSION="edge"\n' > /cf/.env
+(
+  mv() { [ "$2" = /cf/.env ] && exit 3; command mv "$@"; }
+  change_file cfx /cf/.env 's/edge/latest/'
+)
+[ "$(cat /cf/.env)" = 'VERSION="edge"' ] && [ "$(get changed_cfx | cut -d' ' -f2)" = "$(printf 'VERSION="latest"\n' | md5sum | cut -d' ' -f1)" ] ||
+  bad "change_file: a stop before it's in place: $(cat /cf/.env), $(get changed_cfx)"
+status changed_cfx
+change_file cfx /cf/.env 's/edge/latest/' && [ "$(cat /cf/.env)" = 'VERSION="latest"' ] && [ -n "$(get changed_cfx)" ] || bad "change_file: not changed"
+status changed_cfx
+rm -rf /cf
 # --- kept ---
 fresh
 keep_data mowbite update || bad "MowBite's data not kept"

@@ -80,6 +80,8 @@ status() {
   tmp=$(mktemp "$STATUS.XXXXXX") || return 1
   # (sed, not grep: busybox's grep doesn't say when it couldn't write)
   if sed "/^$key /d" "$STATUS" > "$tmp" 2> /dev/null && { [ $# -eq 0 ] || echo "$key $*" >> "$tmp"; } 2> /dev/null; then mv "$tmp" "$STATUS"; else rm -f "$tmp"; return 1; fi
+  # (the notes a stop halfway goes on from: on the disk before the step they're for)
+  case $key in pending_* | changed_* | gone_* | nokeep_openmower | switch_os | os_drop | openmower_missing) sync ;; esac
 }
 get() { sed -n "s/^$1 //p" "$STATUS" 2>/dev/null | head -n1; }
 

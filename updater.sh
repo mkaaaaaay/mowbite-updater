@@ -514,12 +514,13 @@ change_file() {
   [ -f "$2" ] && [ ! -L "$2" ] || return 1
   tmp=$(mktemp "$2.XXXXXX") || return 1
   if cp -p "$2" "$tmp" && mv "$tmp" "$2.before-update" && tmp=$(mktemp "$2.XXXXXX") && sed "$3" "$2" > "$tmp" &&
-    chown "$(stat -c %u:%g "$2")" "$tmp" && chmod "$(stat -c %a "$2")" "$tmp" && mv "$tmp" "$2"; then
-    lines=$(awk 'NR == FNR {a[FNR] = $0; next} a[FNR] != $0 {print a[FNR]; print}' "$2.before-update" "$2" |
+    chown "$(stat -c %u:%g "$2")" "$tmp" && chmod "$(stat -c %a "$2")" "$tmp"; then
+    lines=$(awk 'NR == FNR {a[FNR] = $0; next} a[FNR] != $0 {print a[FNR]; print}' "$2.before-update" "$tmp" |
       while IFS= read -r a && IFS= read -r b; do printf '%s:%s ' "$(printf '%s' "$a" | base64 -w 0)" "$(printf '%s' "$b" | base64 -w 0)"; done)
+    # (noted before it's in place: a stop in between leaves a note without a change, never a change without one)
     # shellcheck disable=SC2086
-    status "changed_$1" "$2" "$(md5sum < "$2" | cut -d' ' -f1)" $lines
-    return 0
+    status "changed_$1" "$2" "$(md5sum < "$tmp" | cut -d' ' -f1)" $lines && mv "$tmp" "$2" && return 0
+    status "changed_$1"
   fi
   rm -f "$tmp"
   return 1
