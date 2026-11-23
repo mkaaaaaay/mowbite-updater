@@ -74,14 +74,24 @@ log() {
 # one line per value, the page gets them. no value: the key goes. written whole and moved in place, only when all of it
 # got written (a full disk leaves the one there was)
 status() {
-  local key="$1" tmp
+  local key="$1"
   shift
   [ -f "$STATUS" ] || : > "$STATUS"
+  # (one writer at a time: the updater, its own update's helper, the interface. without a lock file as it is)
+  if { : >> "$STATUS.lock"; } 2> /dev/null; then
+    { flock 7; status_set "$key" "$@"; } 7>> "$STATUS.lock"
+  else
+    status_set "$key" "$@"
+  fi || return 1
+  # (the notes a stop halfway goes on from: on the disk before the step they're for)
+  case $key in pending_* | changed_* | gone_* | nokeep_openmower | switch_os | os_drop | openmower_missing) sync ;; esac
+}
+status_set() {
+  local key="$1" tmp
+  shift
   tmp=$(mktemp "$STATUS.XXXXXX") || return 1
   # (sed, not grep: busybox's grep doesn't say when it couldn't write)
   if sed "/^$key /d" "$STATUS" > "$tmp" 2> /dev/null && { [ $# -eq 0 ] || echo "$key $*" >> "$tmp"; } 2> /dev/null; then mv "$tmp" "$STATUS"; else rm -f "$tmp"; return 1; fi
-  # (the notes a stop halfway goes on from: on the disk before the step they're for)
-  case $key in pending_* | changed_* | gone_* | nokeep_openmower | switch_os | os_drop | openmower_missing) sync ;; esac
 }
 get() { sed -n "s/^$1 //p" "$STATUS" 2>/dev/null | head -n1; }
 

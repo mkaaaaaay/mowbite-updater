@@ -249,6 +249,16 @@ status changed_cfx
 change_file cfx /cf/.env 's/edge/latest/' && [ "$(cat /cf/.env)" = 'VERSION="latest"' ] && [ -n "$(get changed_cfx)" ] || bad "change_file: not changed"
 status changed_cfx
 rm -rf /cf
+# --- two writing the status at once: nothing lost ---
+i=0
+while [ $i -lt 40 ]; do
+  status "wa$i" x &
+  status "wb$i" y
+  i=$((i + 1))
+done
+wait
+[ "$(grep -c '^w[ab][0-9]* ' "$STATUS")" = 80 ] || bad "status: lines lost by two writing at once: $(grep -c '^w[ab][0-9]* ' "$STATUS") of 80"
+sed -i '/^w[ab][0-9]* /d' "$STATUS"
 # --- the log as the page shows it: access out ---
 [ "$(printf 'a http://u:pw@h/x username: bob password: "p w" s3cr\n' | redact s3cr)" = 'a http://***:***@h/x username: *** password: "***" ***' ] ||
   bad "redact: $(printf 'a http://u:pw@h/x username: bob password: "p w" s3cr\n' | redact s3cr)"
