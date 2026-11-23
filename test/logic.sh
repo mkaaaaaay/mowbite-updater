@@ -1641,6 +1641,7 @@ alone os os_switch os
 [ "$(get os | cut -d' ' -f1)" = switched ] && [ ! -d /fake/c/om ] && [ ! -d /fake/c/pl ] && ! grep -q '^sha256:om \|^sha256:pl ' /fake/layers ||
   bad "os: not switched with OpenMower deleted: $(get os), $(policies)"
 [ "$(get os_drop | cut -d' ' -f1,2)" = "r/om@sha256:dom r/om:edge" ] && [ -n "$(get gone_openmower)" ] && [ -n "$(get gone_planner)" ] || bad "os: its way back not noted"
+[ "$(get os_deletes)" = r/pl:edge ] || bad "os: what's deleted with OpenMower not said: $(get os_deletes)"
 [ "$(first 'compose om .*rm')" -lt "$(first '^rmi')" ] && [ "$(first '^rmi')" -lt "$(first '^pull r/os:t1')" ] || bad "os: deleted in the wrong order"
 echo 0 > /fake/export
 echo '{"areas":["os"]}' > /fake/os_map
@@ -1799,6 +1800,14 @@ status os_ran x
 )
 [ ! -e /fake/looped ] && [ "$(get os)" = "error keep" ] && [ "$(get switch_os)" = "os pull" ] || bad "os: a step not noted, but: $(get os), looped $([ -e /fake/looped ] && echo yes)"
 rm -f /fake/looped
+# cleared first: not an image built here
+: > /fake/calls
+(
+  check_room() { printf 'img sha256:loc 1 r/loc:1 unused\nimg sha256:u 1 r/u:1 unused\n' > "$STATE/room"; }
+  built_here() { [ "$1" = sha256:loc ] && return 0; return 1; }
+  os_clear
+)
+called '^rmi r/u:1' && ! called '^rmi r/loc:1' || bad "os: cleared an image built here: $(grep '^rmi' /fake/calls | tr '\n' '|')"
 fi
 
 [ $fails = 0 ]

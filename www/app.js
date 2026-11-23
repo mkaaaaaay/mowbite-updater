@@ -270,6 +270,7 @@ const DE = {
     'MowBite OS startet mit seiner eigenen Karte und seinen Einstellungen vom letzten Mal, nicht mit den jetzigen von OpenMower.',
   "There isn't room for both: OpenMower's version is deleted first and downloaded again on the way back (that needs the internet).":
     'Für beide ist kein Platz: Die Version von OpenMower wird zuerst gelöscht und auf dem Rückweg neu geladen (das braucht Internet).',
+  'Deleted with it: {list}': 'Mit gelöscht: {list}',
   'Download: {size}. Only with the mower ready in the dock.': 'Download: {size}. Nur mit dem Mäher bereit im Dock.',
   'Only with the mower ready in the dock.': 'Nur mit dem Mäher bereit im Dock.',
   'Switch to MowBite OS': 'Zu MowBite OS wechseln',
@@ -1473,6 +1474,7 @@ function osPart() {
     body = [dim(tr("MowBite OS can take OpenMower's place on this mower. OpenMower's data is kept and OpenMower stopped, then MowBite OS is started and checked. If it doesn't run as it should, OpenMower comes back as it was.")),
       dim(tr(c === 'kept' ? "MowBite OS starts with its own map and settings from the last time it ran, not with OpenMower's current ones." : "MowBite OS takes over OpenMower's map and mower_params.yaml.")),
       b === 'drop' && h('p', {class: 'warn'}, tr("There isn't room for both: OpenMower's version is deleted first and downloaded again on the way back (that needs the internet).")),
+      b === 'drop' && S('os_deletes') && dim(tr('Deleted with it: {list}', {list: S('os_deletes').split(' ').join(', ')})),
       dim(Number(a) > 0 ? tr('Download: {size}. Only with the mower ready in the dock.', {size: mib(a)}) : tr('Only with the mower ready in the dock.')),
       go('switch:os', 'Switch to MowBite OS', 'Really switch?', 'switch=os')];
   } else if (offer === 'no') {

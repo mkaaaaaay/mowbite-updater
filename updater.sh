@@ -2271,6 +2271,8 @@ os_look() {
   # (the image not here: its data_dir as the stack's .env from before says)
   [ -n "$dd" ] || dd=$(env_val "$(os_dir)/.env" MOWBITE_DATA_DIR)
   if os_kept "$dd"; then os_new=kept; else os_new=import; fi
+  # shellcheck disable=SC2046
+  status os_deletes $(for x in $os_holders; do [ "$x" = "$img" ] || docker image inspect -f '{{join .RepoTags ","}}' "$x" 2> /dev/null | cut -d, -f1 | grep . || echo "${x#sha256:}" | cut -c1-12; done)
   status os_switch yes "$mb" "$os_way" "$os_new"
 }
 
@@ -2469,12 +2471,15 @@ os_pull() {
   status os_image "$1" "$(id_of "$1")" "$3" "$4"
   if [ -n "$(get os_ran)" ]; then status switch_os os start; else status switch_os os stop; fi
 }
-# what nothing needs cleared first: the build cache, images no container uses and no compose file names
+# what nothing needs cleared first: the build cache, images no container uses and no compose file names, not one built
+# here (it can't be downloaded again)
 os_clear() {
   local id refs r
   check_room
   prune_cache
   awk '$1 == "img" && ($5 == "dangling" || $5 == "unused") {print $2, $4}' "$STATE/room" | while read -r id refs; do
+    built_here "$id"
+    [ $? -eq 1 ] || continue
     if [ "$refs" = - ]; then
       docker rmi "$id" > /dev/null 2>&1
     else
