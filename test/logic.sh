@@ -249,6 +249,17 @@ sed -i 's/1200/1300/' /p/m.yaml
 set -- /p/m.yaml.mowbite-*
 [ $# = 1 ] || bad "calib: its copy before back taken as a backup: $*"
 rm -rf /p
+# (two in the same second and one with the clock gone back: a copy each, the newest the last one written)
+mkdir -p /p /fake/clock_back
+printf 'll:\n  services:\n    diff_drive:\n      ticks_per_m: 1000\n' > /p/m.yaml
+for v in 5000:1100 5000:1200 4000:1300; do
+  printf '#!/bin/sh\necho %s\n' "${v%:*}" > /fake/clock_back/date
+  chmod 755 /fake/clock_back/date
+  PATH=/fake/clock_back:$PATH sh /r/calib.sh write m.yaml ll/services/diff_drive/ticks_per_m "${v#*:}" > /dev/null
+done
+[ "$(PATH=/fake/clock_back:$PATH sh /r/calib.sh back m.yaml | cut -d' ' -f1)" = back ] && grep -q 'ticks_per_m: 1200' /p/m.yaml ||
+  bad "calib: not back to the one before the last write: $(grep ticks /p/m.yaml), $(echo /p/*)"
+rm -rf /p /fake/clock_back
 # --- a stack's file changed: noted before it's in place, a stop in between leaves it as it was ---
 mkdir -p /cf
 printf 'VERSION="edge"\n' > /cf/.env

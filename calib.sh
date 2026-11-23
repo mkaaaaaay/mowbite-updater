@@ -82,7 +82,11 @@ write)
     want="$want ${line%% *} $1 $old $2"
     shift 2
   done
+  # (after the newest copy, also in the same second or when the clock went back)
   t=$(date +%s)
+  n=$(newest)
+  n=${n##*.mowbite-}
+  case $n in '' | *[!0-9]*) ;; *) [ "$n" -lt "$t" ] || t=$((n + 1)) ;; esac
   back="$file.mowbite-$t"
   new=".$file.mowbite-new"
   owner=$(stat -c '%u:%g' "$file") && mode=$(stat -c '%a' "$file") || { echo "refused no_stat"; exit 1; }
