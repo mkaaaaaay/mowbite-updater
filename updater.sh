@@ -573,7 +573,9 @@ keep_change() {
 
 # the image part $3 ran before, kept under a tag of its own in its repository $1: rb-<part>-<time>-<image>
 keep_back() {
-  t=$1:rb-$3-$(now)-$(echo "$2" | sed 's/^sha256://' | cut -c1-8)
+  local n t
+  n=$(backs "$3" "$1" | head -n1 | sed -E 's/^rb-([a-z][a-z0-9_]*-)?([0-9]+)-.*/\2/')
+  t=$1:rb-$3-$(stamp "$n")-$(echo "$2" | sed 's/^sha256://' | cut -c1-8)
   docker tag "$2" "$t" && echo "$t"
 }
 # nothing changed after all: the tag back on the image kept, the rollback tag made for it gone
@@ -639,8 +641,7 @@ keep_data() {
   list=$(data_of "$1")
   [ -n "$list" ] || return 0
   room_for "$ROOM_DATA" || { log "$1: not enough room to keep its data ($(free_mb) MB free)"; return 1; }
-  # (a second one within the same second)
-  while dir=$DATA/$1-$(now) && [ -e "$dir" ]; do sleep 1; done
+  dir=$DATA/$1-$(stamp "$(data_dirs "$1" | head -n1 | sed 's/.*-//')")
   tmp=$dir.new
   rm -rf "$DATA/$1-"*.new
   mkdir -p "$DATA" && chmod 700 "$DATA" && mkdir -m 700 "$tmp" && echo "$2" > "$tmp/why" || return 1

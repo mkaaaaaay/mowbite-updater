@@ -320,6 +320,13 @@ rm /fake/fail_keep_mower_params.yaml
 (free_mb() { echo 99; }; keep_data mowbite update) && bad "kept with less than 100 MB free"
 [ -z "$(ls /st/data 2> /dev/null)" ] && grep -q "not enough room to keep" /st/log || bad "no room: $(ls /st/data)"
 (free_mb() { echo 100; }; keep_data mowbite update) || bad "not kept with 100 MB free"
+# (the clock gone back: a new copy and a new rollback tag still after the ones there)
+fresh
+mkdir -p /st/data/mowbite-5000 /st/data/mowbite-4000
+keep_data mowbite update
+[ "$kept" = /st/data/mowbite-5001 ] && [ -d "$kept" ] && [ "$(newest mowbite)" = "$kept" ] || bad "clock back: kept as $kept, the newest $(newest mowbite)"
+t=$(backs() { echo "rb-mowbite-5000-abcdefgh sha256:x"; }; keep_back r/mowbite sha256:mb mowbite)
+[ "$t" = r/mowbite:rb-mowbite-5001-mb ] || bad "clock back: rollback tag $t"
 fresh
 (ROOM_DATA=99999999; free_mb() { echo 999999999; }; keep_data mowbite update) && bad "kept without room for its data twice and the spare"
 [ -z "$(ls /st/data 2> /dev/null)" ] && grep -q "not enough room to keep \." /st/log || bad "no room for its data: $(ls /st/data)"

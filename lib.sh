@@ -192,6 +192,13 @@ om_channel() {
   echo "${v:-edge}"
 }
 auto() { [ "$(conf "$1_auto" 0)" = 1 ]; }
+# the number of a new data copy or rollback tag: after the newest there ($1), also when the clock went back
+stamp() {
+  local t
+  t=$(now)
+  case $1 in '' | *[!0-9]*) ;; *) [ "$1" -lt "$t" ] || t=$(($1 + 1)) ;; esac
+  echo "$t"
+}
 # the folders of the data kept, of part $1 or of all, newest first. $2: only those kept before an update (update) or
 # before data was put back (put)
 data_dirs() {
