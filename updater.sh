@@ -1740,6 +1740,7 @@ nokeep_off() {
   exists "$OM" && status gone_openmower
   status nokeep_openmower
   status nokeep_holders
+  status nokeep_lack
   status openmower_missing
   status openmower_fw_check
 }
@@ -1863,7 +1864,7 @@ nokeep_drop() {
 # downloaded, the builds that ran on it built again, all started and seen running, else the one before the same way.
 # one already there only while it doesn't mow
 nokeep_go() {
-  local way target prev ref remote new why pull tag left d fw='' data=''
+  local way target prev ref remote new why pull tag left d n fw='' data=''
   # shellcheck disable=SC2046
   set -- $(get nokeep_openmower)
   way=$1 target=$2 prev=$3 ref=$4 remote=$5 new=${6:--} why=${7:-}
@@ -1962,11 +1963,16 @@ nokeep_go() {
     return 1
   fi
   # (not seen while a build it started with couldn't be built: not the new version's doing, it stays and is looked at
-  # again, with the build tried once more)
+  # again with the build tried once more, NOKEEP_TRIES times, then back to the version before)
   if [ -n "$nk_lack" ]; then
-    log "openmower: $target not seen running without$nk_lack, looked at again later"
-    outcome openmower unconfirmed
-    return 1
+    n=$(($(get nokeep_lack | grep -x '[0-9]*' || echo 0) + 1))
+    if [ $n -lt "$NOKEEP_TRIES" ]; then
+      status nokeep_lack $n
+      log "openmower: $target not seen running without$nk_lack, looked at again later"
+      outcome openmower unconfirmed
+      return 1
+    fi
+    log "openmower: $target not seen running without$nk_lack after $n looks"
   fi
   # the new version didn't run: left out as after any update, the one before from its registry again
   fw=$fw_failed

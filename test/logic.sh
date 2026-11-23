@@ -586,7 +586,8 @@ compose() {
   case " $* " in
   *" rm "*) [ ! -e "/fake/rm_fail_$c" ] && rm -rf "/fake/c/$c" ;;
   *" build "*)
-    [ -e /fake/build_fail ] && return 1
+    # (with an id in it only on that version of OpenMower)
+    [ -e /fake/build_fail ] && { [ ! -s /fake/build_fail ] || [ "$(id_of r/om:edge)" = "$(cat /fake/build_fail)" ]; } && return 1
     n=$(($(cat /fake/builds 2> /dev/null || echo 0) + 1)) && echo $n > /fake/builds
     r=$(ref_of "$c")
     sed -i "\\|^$r |d" /fake/refs
@@ -1031,6 +1032,21 @@ nokeep_due || bad "external: its next look not due"
 run again openmower
 [ "$(get openmower | cut -d' ' -f1)" = updated ] && [ "$(id om)" = sha256:new ] && [ "$(get planner | cut -d' ' -f1)" = updated ] && [ "$(id pl)" = sha256:b1 ] &&
   ! grep -q '^gone_\|^nokeep_' /st/status || bad "external: not done on its next look: $(get openmower), $(get planner)"
+# a planner that can't be built on the new version at all: after NOKEEP_TRIES looks back to the version before
+nk_fresh
+: > /fake/external
+echo sha256:new > /fake/build_fail
+nokeep
+n=1
+while [ "$(get openmower)" = unconfirmed ] && [ $n -lt 10 ]; do
+  echo "$nk_next" > /fake/now
+  run again openmower
+  n=$((n + 1))
+done
+rm /fake/build_fail
+[ $n = "$NOKEEP_TRIES" ] && [ "$(get openmower | cut -d' ' -f1)" = rolled_back ] && [ "$(id om)" = sha256:om ] && running pl &&
+  [ "$(get openmower_failed | cut -d' ' -f1)" = sha256:new ] && ! grep -q '^gone_\|^nokeep_' /st/status ||
+  bad "external: a planner never built on the new version, after $n looks: $(get openmower), runs $(id om), $(get nokeep_openmower)"
 # stuck as before: OpenMower runs on the version before, the planner gone and nothing answers. built then, not while the
 # mower mows or is idle out of the dock
 nk_fresh
