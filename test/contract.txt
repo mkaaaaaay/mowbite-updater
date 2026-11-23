@@ -43,6 +43,7 @@ env MQTT_HOST
 env MQTT_PASSWORD
 env MQTT_PORT
 env MQTT_PREFIX
+env MQTT_USER
 env OM_RELEASES
 env OPENMOWER_CONTAINER
 env PLANNER_CONTAINER
@@ -69,6 +70,7 @@ form status openmower_nokeep yes <MB downloaded> <parts built again, commas, or 
 form status os error offer|schedule <unix s>|not_docked|battery <min %>|firmware|hold|keep|pull|files|import|stop|broker|registry|busy|back|interrupted
 form status os switched <unix s> import|kept|rolled_back pull|files|import|start|health|halt|info|state|emergency|back <unix s> map|old [lost]
 form status os_data <the folder of OpenMower's data kept before>
+form status os_deletes <the images deleted with OpenMower with drop, a tag or a short id each>
 form status os_drop <OpenMower by its digest> <its tag> <the images deleted> ...
 form status os_env <datum lat> <long> <height> <OpenMower's ros folder> <its params folder>
 form status os_image <image> <its id, or -> <MB free it needs> import|kept
@@ -153,6 +155,7 @@ status mowbite_version
 status mower
 status night_done
 status nokeep_holders
+status nokeep_lack
 status nokeep_openmower
 status openmower_available
 status openmower_back
@@ -170,6 +173,7 @@ status openmower_running
 status openmower_saved
 status openmowerapp_name
 status os_data
+status os_deletes
 status os_drop
 status os_env
 status os_image

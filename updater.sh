@@ -2206,6 +2206,7 @@ os_kept() {
 # form: status os_switch yes <MB downloaded> keep|drop import|kept
 # form: status os_switch no image|registry|data|datum|import|files|openmower|nokeep|pending|stack|prev|room <MB needed> <MB there>
 # form: status os_switch on <since, unix s>
+# form: status os_deletes <the images deleted with OpenMower with drop, a tag or a short id each>
 # whether MowBite OS can take OpenMower's place, for its card. keep: next to OpenMower's image, drop: that and what's
 # built on it deleted first, downloaded and built again on the way back. import: the OS takes OpenMower's map and
 # mower_params.yaml, kept: its data_dir has its own from before. for the way there os_way, os_need (MB free it needs),

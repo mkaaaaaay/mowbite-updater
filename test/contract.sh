@@ -19,6 +19,8 @@ part='s/\$\{?(1|p|id|@)\}?/<part>/g'
   grep -ohE '(^|[;&|{(]|then|else|do) *status "?[A-Za-z0-9_${}@]+' $src | sed -E 's/.*status "?/status /; '"$part"
   # shellcheck disable=SC2086
   grep -ohE '\$\{[A-Z][A-Z0-9_]*:-' $src | grep -vE 'CONTENT_|XDG_' | tr -d '${:-' | sed 's/^/env /'
+  # (and the ones its compose.yaml names, used without a default)
+  sed -n 's/^ *#   \([A-Z][A-Z0-9_]*\):.*/env \1/p' compose.yaml
   # shellcheck disable=SC2086
   sed -n 's/^ *# form: /form /p' $src
   docker compose -f compose.yaml config --format json |
