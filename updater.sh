@@ -3223,6 +3223,12 @@ update_build() {
   want=$(want_of "$1") || { outcome "$1" error github; return 1; }
   # shellcheck disable=SC2086
   set -- "$1" $want
+  # never back to an older release by picking stable, as with an image
+  if [ "$4" = release ] && [ "$(channel "$1")" = stable ] && older "${3#v}" "$(get "$1_release" | sed 's/^v//')"; then
+    log "$1: stable $3 is older than $(get "$1_release") that runs, it stays as it is"
+    outcome "$1" stable_older "${3#v}"
+    return 0
+  fi
   base=$(base_of "$(box "$1")")
   if [ "$2" = "$(built_of "$1")" ] && base_same "$1" "$base"; then
     release_name "$1" "$3" "$4"

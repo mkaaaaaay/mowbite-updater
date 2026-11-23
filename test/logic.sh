@@ -673,6 +673,15 @@ update_openmower
 status planner_built
 update_openmower
 [ "$(get openmower_nokeep)" = "no github planner" ] || bad "nokeep: github away and the commit it runs unknown, but: $(get openmower_nokeep)"
+# a planner on a newer beta set to stable: not built back to the older release
+nk_fresh
+status planner_release v1.1.0-beta.2
+: > /fake/calls
+update_build planner
+[ "$(get planner)" = "stable_older 1.0.0" ] && ! called 'compose pl .* build' || bad "build: stable built back under a newer beta: $(get planner)"
+status planner_release v0.9.0
+update_build planner
+[ "$(get planner | cut -d' ' -f1)" != stable_older ] || bad "build: an older release kept from a newer stable: $(get planner)"
 # asked for, not offered any more: nothing deleted
 nk_fresh
 echo 0 > /fake/cache

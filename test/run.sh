@@ -1434,8 +1434,8 @@ post conf 'planner beta' > /dev/null
 [ "$(docker cp "$P-planner:/mbt-updater.sh" - 2> /dev/null | tar -xO | md5sum | cut -c1-32)" = c81e0ba66d67ec4ff4d79e3d4af603b3 ] &&
   ok "from exactly its commit" || bad "not built from $NEW"
 post conf 'planner stable' > /dev/null
-[ "$(look)" = "updated no v0.2.0" ] && [ "$(val "s.get('planner_built')")" = "$MAIN" ] &&
-  [ "$(val "s.get('planner_release')")" = v0.2.0 ] && ok "on stable the newest release without a dash" ||
+[ "$(look)" = "stable_older no v0.2.0" ] && [ "$(val "s.get('planner_built')")" = "$NEW" ] &&
+  [ "$(val "s.get('planner_release')")" = v0.3.0-beta.1 ] && ok "on stable it stays on its beta, the older release isn't built" ||
   bad "stable: $(val "s.get('planner')") $(val "s.get('planner_available')") built $(val "s.get('planner_built')")"
 
 say "itself"
