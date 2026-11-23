@@ -1826,7 +1826,7 @@ nokeep_rm() {
   [ -n "$why" ] || in_registry "$(get nokeep_openmower | cut -d' ' -f3)" || why=registry
   if [ -n "$why" ]; then
     log "openmower: stopped before anything was deleted ($why), the containers removed come back"
-    nokeep_undo
+    nokeep_undo || return 1
     if [ -n "$(noted)$(get gone_openmower)" ]; then outcome openmower error undo; else outcome openmower error "$why"; fi
     return 1
   fi
@@ -1846,8 +1846,13 @@ nokeep_undo() {
   done
   # (the note of one that isn't there stays: its card and its update know it by that)
   for p in $(noted); do exists "$(get "gone_$p" | cut -d' ' -f1)" && status "gone_$p"; done
-  nokeep_off
   unhold
+  # (OpenMower not there again: its update stays and is tried again, as one whose download failed)
+  if [ -n "$(get gone_openmower)" ] && ! exists "$OM"; then
+    nokeep_missing
+    return 1
+  fi
+  nokeep_off
 }
 # the build cache cleared (a test on a pc with builds of its own: PRUNE=0)
 prune_cache() { [ "${PRUNE:-1}" = 0 ] || timeout $T_UP docker builder prune -af > /dev/null 2>&1; }

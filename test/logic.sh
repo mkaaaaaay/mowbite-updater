@@ -595,6 +595,7 @@ compose() {
     echo "sha256:b$n l1 n2 n3 p1" >> /fake/layers
     ;;
   *" up "*)
+    [ ! -e "/fake/up_fail_$c" ] || return 1
     r=$(ref_of "$c")
     mkdir -p "/fake/c/$c"
     echo "$r" > "/fake/c/$c/ref"
@@ -816,6 +817,21 @@ echo r/om@sha256:dom > /fake/reg_gone
 WHY=start MANUAL='' update_openmower
 [ "$(get openmower)" = "error registry" ] && [ "$(id om)" = sha256:om ] && [ "$(id pl)" = sha256:pl ] && ! called '^rmi' &&
   ! grep -q '^gone_\|^nokeep_' /st/status || bad "nokeep: on after a stop without its way back: $(get openmower), planner $(id pl)"
+# its way back gone once OpenMower is removed and OpenMower not made again: not forgotten, tried again
+nk_fresh
+: > /fake/up_fail_om
+(
+  box_rm() { compose 1 "$1" rm -s -f svc; [ "$1" != om ] || echo r/om@sha256:dom > /fake/reg_gone; ! exists "$1"; }
+  nokeep
+)
+rm -f /fake/up_fail_om /fake/reg_gone
+[ "$(get openmower)" = "error missing" ] && [ ! -e /fake/c/om ] && [ "$(get nokeep_openmower | cut -d' ' -f1)" = rm ] && [ -n "$(get openmower_missing)" ] ||
+  bad "nokeep: OpenMower not made again and forgotten: $(get openmower), $(get nokeep_openmower), missing $(get openmower_missing)"
+get openmower_missing | cut -d' ' -f2 > /fake/now
+nokeep_due || bad "nokeep: OpenMower not made again, its next try not due"
+run again openmower
+[ "$(get openmower | cut -d' ' -f1)" = updated ] && [ "$(id om)" = sha256:new ] && ! grep -q '^gone_\|^nokeep_\|^openmower_missing ' /st/status ||
+  bad "nokeep: not on after OpenMower wasn't made again: $(get openmower), $(get nokeep_openmower)"
 # stopped while the images are deleted: the rest of them first
 nk_fresh
 (
