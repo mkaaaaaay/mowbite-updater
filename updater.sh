@@ -1262,7 +1262,7 @@ update_image() {
 # back to the version before, by hand: the newest rollback tag on another image, under the tag that runs now. what ran
 # is kept the same way and left out of the automatic updates. it comes back when the one before doesn't answer
 back_image() {
-  local p="$1" c current repo before to now_back d
+  local p="$1" c current repo before to now_back d failed
   c=$(box "$p")
   current=$(ref_of "$c")
   repo=$(repo_of "$current")
@@ -1273,15 +1273,18 @@ back_image() {
   now_back=$(keep_back "$repo" "$before" "$p")
   [ -n "$now_back" ] || { outcome "$p" error keep; return 1; }
   log "$p: kept the version that ran as $now_back, back to $to"
+  # (left out before the restart: a stop in between doesn't bring it back the next night)
+  failed=$(get "${p}_failed")
+  d=$(digests_in "$before" "$repo")
+  status "${p}_failed" "$before" ${d:+"$d"} || { undo_back "$now_back" "$current"; outcome "$p" error keep; return 1; }
   docker tag "$repo:$to" "$current"
   if restart "$p" "$(id_of "$repo:$to")"; then
     docker rmi "$repo:$to" > /dev/null 2>&1
-    d=$(digests_in "$before" "$repo")
-    status "${p}_failed" "$before" ${d:+"$d"}
     outcome "$p" back "$(now)" "$(version_of "$p")"
     return 0
   fi
   log "$p: the version before didn't answer, again the one that ran"
+  status "${p}_failed" $failed
   docker tag "$now_back" "$current"
   if restart "$p" "$before"; then
     docker rmi "$now_back" > /dev/null 2>&1
@@ -1578,7 +1581,7 @@ update_openmower() {
 # its digest (openmower_prev) under the tag that runs, as long as the registry has it. the version that ran is left out
 # of the automatic updates, it runs again when the one before doesn't answer
 back_openmower() {
-  local ref repo before prev need free back d
+  local ref repo before prev need free back d failed at
   if nokeep_busy; then
     log "openmower: its update without a copy isn't done, that goes on first"
     outcome openmower error nokeep
@@ -1610,22 +1613,30 @@ back_openmower() {
   2) undo_back "$back" "$ref" && return 2 ;;
   *) log "openmower: pull of $prev failed"; undo_back "$back" "$ref"; outcome openmower error pull; return 1 ;;
   esac
+  if at=$(soon); then
+    log "openmower: MowBite's schedule may start the mower at $(date -d "@$at" '+%F %T'), it stays as it is"
+    undo_back "$back" "$ref"
+    outcome openmower error schedule "$at"
+    return 2
+  fi
   hold openmower || { undo_back "$back" "$ref"; outcome openmower error hold; return 1; }
   docked || { unhold; log "openmower: the mower left the dock, it stays as it is"; undo_back "$back" "$ref"; return 2; }
   log "openmower: kept the version that ran as $back, back to $prev"
+  failed=$(get openmower_failed)
   d=$(digests_in "$before" "$repo")
+  status openmower_failed "$before" ${d:+"$d"} || { unhold; undo_back "$back" "$ref"; outcome openmower error keep; return 1; }
   docker tag "$prev" "$ref"
   if restart openmower "$(id_of "$prev")"; then
     unhold
     # (the one it left is GBs, none is kept, as after an update)
     docker rmi "$back" > /dev/null 2>&1
-    status openmower_failed "$before" ${d:+"$d"}
     status openmower_prev
     outcome openmower back "$(now)" "${ref##*:}"
     rebuild_on_om "$ref" new
     return 0
   fi
   log "openmower: the version before didn't answer, again the one that ran"
+  status openmower_failed $failed
   docker tag "$back" "$ref"
   if restart openmower "$before"; then
     docker rmi "$back" > /dev/null 2>&1

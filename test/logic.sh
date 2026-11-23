@@ -442,6 +442,50 @@ echo x >> "/st/data/mowbite-$t/1.tar"
 put_by_hand mowbite "$t"
 [ "$(get mowbite)" = "error data_put" ] && ! called "^restart" && called "^unhold" || bad "a changed copy by hand: $(get mowbite)"
 
+# --- back to the version before by hand: the one it leaves noted before the restart, the note as it was when it fails ---
+fresh
+(
+  newest_back() { echo rb-mowbite-1; }
+  restart() { echo "restart $1 $(get "$1_failed")" >> /fake/calls; [ ! -e /fake/restart_fail ]; }
+  back_image mowbite
+)
+called "^restart mowbite sha256:mb" && [ "$(get mowbite | cut -d' ' -f1)" = back ] || bad "back by hand: not noted before the restart: $(grep ^restart /fake/calls)"
+fresh
+status mowbite_failed sha256:old
+: > /fake/restart_fail
+(
+  newest_back() { echo rb-mowbite-1; }
+  restart() { echo "restart $1 $(get "$1_failed")" >> /fake/calls; [ ! -e /fake/restart_fail ]; }
+  back_image mowbite
+)
+called "^restart mowbite sha256:mb" && [ "$(get mowbite_failed)" = sha256:old ] || bad "back by hand that failed: $(get mowbite_failed)"
+# (OpenMower: its version before from the registry, not in the 30 minutes before the schedule)
+om_back() {
+  (
+    in_registry() { :; }
+    layers() { :; }
+    need_mb() { echo 1; }
+    free_mb() { echo 99999; }
+    with_progress() { :; }
+    rebuild_on_om() { :; }
+    restart() { echo "restart $1 $(get "$1_failed")" >> /fake/calls; [ ! -e /fake/restart_fail ]; }
+    back_openmower
+  )
+}
+fresh
+status openmower_prev r/om@sha256:p
+echo 1777 > /fake/soon
+om_back
+[ "$(get openmower)" = "error schedule 1777" ] && ! called "^restart" && ! called "^hold" || bad "OpenMower back before the schedule: $(get openmower)"
+rm /fake/soon
+om_back
+called "^restart openmower sha256:om" && [ "$(get openmower | cut -d' ' -f1)" = back ] || bad "OpenMower back: not noted before the restart: $(grep ^restart /fake/calls)"
+fresh
+status openmower_prev r/om@sha256:p
+: > /fake/restart_fail
+om_back
+[ -z "$(get openmower_failed)" ] && called "^restart openmower sha256:om" || bad "OpenMower back that failed: $(get openmower_failed)"
+
 # --- stopped halfway ---
 kept_fresh
 keep_data mowbite put "$d"
