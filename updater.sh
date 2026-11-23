@@ -86,7 +86,8 @@ mower() {
     # a full battery stops charging, the contacts' voltage still says it's in the dock
     awk -v v="$(mqtt sensors/om_v_charge/data)" 'BEGIN {exit !(v + 0 >= 20)}' && echo 1 && return 0
   fi
-  echo "0 ${state:-unknown}"
+  # (a state there but not read: busy, not the "unknown" of no answer)
+  echo "0 ${state:-UNREADABLE}"
 }
 docked() { [ "$(mower)" = 1 ]; }
 # OpenMower doesn't drive the mower: idle, in the dock or not, or no answer from it at all. no broker: no telling, so not

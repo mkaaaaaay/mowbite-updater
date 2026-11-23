@@ -38,6 +38,7 @@ const DE = {
   'is driving to the dock': 'fährt zum Dock',
   'is leaving the dock': 'fährt aus dem Dock',
   'is recording an area': 'nimmt eine Fläche auf',
+  "in a state the updater can't read": 'in einem Zustand, den der Updater nicht lesen kann',
   'Automatically: {when} ({names})': 'Automatisch: {when} ({names})',
   'Automatically: off': 'Automatisch: aus',
   'every night at {at}': 'jede Nacht um {at}',
@@ -1028,7 +1029,8 @@ function lastRun() {
   return null;
 }
 // OpenMower's states besides idle, in words
-const STATES = {MOWING: 'is mowing', DOCKING: 'is driving to the dock', UNDOCKING: 'is leaving the dock', AREA_RECORDING: 'is recording an area'};
+const STATES = {MOWING: 'is mowing', DOCKING: 'is driving to the dock', UNDOCKING: 'is leaving the dock', AREA_RECORDING: 'is recording an area',
+  UNREADABLE: "in a state the updater can't read"};
 // the mower right now, whether updates can run: a word, no lock (its state is up to a minute old, and some parts don't
 // wait for the dock)
 function mowerLine() {

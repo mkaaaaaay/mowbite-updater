@@ -1813,6 +1813,13 @@ status os_ran x
 )
 [ ! -e /fake/looped ] && [ "$(get os)" = "error keep" ] && [ "$(get switch_os)" = "os pull" ] || bad "os: a step not noted, but: $(get os), looped $([ -e /fake/looped ] && echo yes)"
 rm -f /fake/looped
+# a robot_state there but its state not read: not taken for idle
+os_fresh
+echo '{"current_state":"idle_docked","is_charging":1}' > /fake/state
+(
+  eval "$(sed -n '/^mower() {/,/^}/p' /r/updater.sh)"
+  [ "$(mower)" = "0 UNREADABLE" ] && ! quiet && ! docked
+) || bad "os: a state not read taken for idle"
 # cleared first: not an image built here
 : > /fake/calls
 (
