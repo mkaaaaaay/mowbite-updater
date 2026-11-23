@@ -249,7 +249,13 @@ status changed_cfx
 change_file cfx /cf/.env 's/edge/latest/' && [ "$(cat /cf/.env)" = 'VERSION="latest"' ] && [ -n "$(get changed_cfx)" ] || bad "change_file: not changed"
 status changed_cfx
 rm -rf /cf
-# --- kept ---
+# --- the log as the page shows it: access out ---
+[ "$(printf 'a http://u:pw@h/x username: bob password: "p w" s3cr\n' | redact s3cr)" = 'a http://***:***@h/x username: *** password: "***" ***' ] ||
+  bad "redact: $(printf 'a http://u:pw@h/x username: bob password: "p w" s3cr\n' | redact s3cr)"
+mkdir -p "$STATE"
+echo "2026-01-01 00:00:00 build: password=abc" >> "$LOG"
+REQUEST_METHOD=GET QUERY_STRING='' sh /r/www/cgi-bin/updater 2> /dev/null | grep -q "password=abc" && bad "redact: the log goes out as it is"
+REQUEST_METHOD=GET QUERY_STRING='' sh /r/www/cgi-bin/updater 2> /dev/null | grep -q "password=\*\*\*" || bad "redact: the log not there"
 fresh
 keep_data mowbite update || bad "MowBite's data not kept"
 d=$(newest mowbite)

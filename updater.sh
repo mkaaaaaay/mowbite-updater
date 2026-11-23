@@ -3468,39 +3468,6 @@ secrets() {
   [ "$1" = "$OM" ] && calib_run read ntrip_client/username ntrip_client/password ntrip_client/user 2> /dev/null |
     awk '$1 ~ /^ntrip_client\// { sub(/^[^ ]* /, ""); gsub(/^["\047]|["\047]$/, ""); if (length($0) >= 3) print }'
 }
-# a log as it may be shown: the given values out, the access in a url (user:password@) and what follows password,
-# token, secret or an api key with : or =, each as ***
-redact() {
-  # (through the environment: awk -v would read a backslash in one as an escape)
-  SECRETS="$1" awk '
-    function ci(w,   r, i, c, u, l) { r = ""; for (i = 1; i <= length(w); i++) { c = substr(w, i, 1); u = toupper(c); l = tolower(c); r = r (u != l ? "[" u l "]" : c) } return r }
-    function lit(line, x,   out, p) { out = ""; while ((p = index(line, x)) > 0) { out = out substr(line, 1, p - 1) "***"; line = substr(line, p + length(x)) } return out line }
-    BEGIN {
-      n = split(ENVIRON["SECRETS"], s, "\n")
-      # (up to the last @ before the host: a password can hold one)
-      url = "://[^/@ :\"\047]+:[^ /\"\047]*@"
-      kv = "(" ci("password") "|" ci("passwd") "|" ci("pwd") "|" ci("secret") "|" ci("token") "|" ci("api_key") "|" ci("apikey") ")[\"\047]?[ \t]*[:=][ \t]*[\"\047]?"
-      val = "^[^\"\047 ,;}&]+"
-    }
-    {
-      line = substr($0, 1, 1000)
-      for (i = 1; i <= n; i++) if (length(s[i]) >= 3) line = lit(line, s[i])
-      out = ""
-      while (match(line, url)) { out = out substr(line, 1, RSTART + 2) "***:***@"; line = substr(line, RSTART + RLENGTH) }
-      line = out line
-      out = ""
-      while (match(line, kv)) {
-        head = substr(line, 1, RSTART + RLENGTH - 1)
-        q = substr(head, length(head), 1)
-        out = out head
-        line = substr(line, RSTART + RLENGTH)
-        # (in quotes: up to the closing one, spaces too)
-        if (q == "\"" || q == "\047") { if (match(line, "^[^" q "]*")) line = "***" substr(line, RLENGTH + 1) }
-        else if (match(line, val)) line = "***" substr(line, RLENGTH + 1)
-      }
-      print out line
-    }'
-}
 # a container's last log lines for its page, with the secrets out: "#<name> <unix>" and then the lines, oldest first
 box_logs() {
   local out
