@@ -3925,6 +3925,19 @@ at_minute() {
 # its page and its interface (on the host's network: on the mower's address)
 serve() { pidof httpd > /dev/null || httpd -p "${PORT:-8083}" -h /www; }
 
+# one updater on a docker: a lock next to the stacks, held while it runs. a second one waits for it
+one_only() {
+  local d f
+  d=$(label "$ME" project.working_dir)
+  [ -n "$d" ] || return 0
+  f=$(dirname "$d")/.mowbite-updater.lock
+  { exec 9>> "$f"; } 2> /dev/null || { log "no lock next to the stacks ($f), a second updater isn't kept out"; return 0; }
+  flock -n 9 && return 0
+  log "another updater runs on this docker, this one waits for it"
+  flock 9
+  log "the other updater is gone, this one goes on"
+}
+
 # (sourced by a test for its functions)
 [ -n "$UPDATER_NO_LOOP" ] && return 0
 trap 'exit 0' TERM INT
@@ -3948,6 +3961,7 @@ rm -f "$MQTT_OPTS" "$MQTT_PUB_OPTS"
   (umask 077 && printf -- '-u %s\n-P %s\n' "$MQTT_USER" "$MQTT_PASSWORD" > "$MQTT_OPTS" && cp "$MQTT_OPTS" "$MQTT_PUB_OPTS")
 serve
 log "started"
+one_only
 # (its own prefix is gone: OpenMower's broker on the mower has none, an external one's comes from OpenMower)
 [ -z "${MQTT_PREFIX:-}" ] || log "MQTT_PREFIX is left out: OpenMower's broker on the mower has no prefix, an external one's comes from OpenMower"
 # a new version of itself since it last started (its own update, or one by hand in dockge), or the one before back

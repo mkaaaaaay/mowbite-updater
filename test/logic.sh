@@ -459,6 +459,17 @@ echo x >> "/st/data/mowbite-$t/1.tar"
 put_by_hand mowbite "$t"
 [ "$(get mowbite)" = "error data_put" ] && ! called "^restart" && called "^unhold" || bad "a changed copy by hand: $(get mowbite)"
 
+# --- one updater on a docker: a second one waits for the first ---
+(exec 9>> /.mowbite-updater.lock && flock 9 && sleep 3) &
+sleep 1
+(one_only && log "second on")
+wait
+grep -q "this one waits" /st/log && [ "$(grep -n "second on\|is gone" /st/log | cut -d: -f2- | cut -d' ' -f3- | tr '\n' '|')" = "the other updater is gone, this one goes on|second on|" ] ||
+  bad "a second updater: $(tail -n 3 /st/log)"
+(one_only && log "alone on")
+grep -q "alone on" /st/log && [ "$(grep -c "this one waits" /st/log)" = 1 ] || bad "one updater alone waited"
+rm -f /.mowbite-updater.lock
+
 # --- docker that hangs, an up cut short while compose makes it anew ---
 : > /fake/hang
 t0=$(date +%s)
