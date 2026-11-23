@@ -338,9 +338,12 @@ stackfile() {
     grep -q "^[[:space:]]*image:[[:space:]]*$(re "$2")[[:space:]]*\$" "$f" 2>/dev/null && echo "$f" && return
   done
 }
-# a build's context and its base image (a build argument with IMAGE in its name), from its stack's compose config
-context_of() { compose $T_REGISTRY "$1" config "$(service "$1")" 2>/dev/null | sed -n 's/^ *context: *//p' | head -n1; }
-base_of() { compose $T_REGISTRY "$1" config "$(service "$1")" 2>/dev/null | sed -n 's/^ *[A-Z_]*IMAGE[A-Z_]*: *//p' | tr -d '"' | head -n1; }
+# a build's context, its base image (a build argument with IMAGE in its name) and the image it's named, from its stack's
+# compose config
+config_of() { compose $T_REGISTRY "$1" config "$(service "$1")" 2>/dev/null | sed -n "$2" | tr -d '"' | head -n1; }
+context_of() { config_of "$1" 's/^ *context: *//p'; }
+base_of() { config_of "$1" 's/^ *[A-Z_]*IMAGE[A-Z_]*: *//p'; }
+named_of() { config_of "$1" 's/^    image: *//p'; }
 # owner/repo and the branch of a github context (as context_of says it), empty for anything else
 source_of() {
   printf '%s' "$1" | sed -n 's|^https://github\.com/\([A-Za-z0-9_.-]*/[A-Za-z0-9_.-]*\)\.git\(#\([A-Za-z0-9_./-]*\)\)\{0,1\}$|\1 \3|p'
@@ -944,6 +947,10 @@ start_part() {
     log "$1: compose couldn't start it"
     return 1
   fi
+  # (the builds made first for it right after it: they wait for its ROS master)
+  if [ "$1" = openmower ]; then
+    for x in $(om_builds); do start_part "$x" || log "$x: not started with OpenMower"; done
+  fi
   rehold
 }
 seen() {
@@ -1014,6 +1021,7 @@ go_back() {
   fi
   docker tag "$2" "$3"
   undo_change "$1"
+  [ "$1" != openmower ] || pf_back
   # (its data in a format the new version raised: back as it was before the update, what it has now kept too)
   d=$(newer_data "$1") && if put_data "$1" "$d"; then data=data; else data=failed; fi
   if ! restart "$1" "$(id_of "$2")"; then
@@ -1023,6 +1031,7 @@ go_back() {
   else
     outcome "$1" rolled_back ${fw:+"firmware"} ${data:+"$data"}
   fi
+  [ "$1" != openmower ] || pf_backed
   status "pending_$1"
   return 0
 }
@@ -1335,9 +1344,11 @@ back_image() {
 
 # --- OpenMower ---
 
+# the sed expression that sets key $1 of a .env to $2, written the way compose reads it (export in front or not)
+env_set() { printf 's/^\\([[:space:]]*\\(export[[:space:]][[:space:]]*\\)\\{0,1\\}%s=\\).*/\\1"%s"/' "$1" "$2"; }
 # VERSION in its .env set to a tag, checked afterwards (and put back when it didn't take)
 set_om_version() {
-  change_file openmower "$(om_env)" "s/^\([[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}VERSION=\).*/\1\"$1\"/" || return 1
+  change_file openmower "$(om_env)" "$(env_set VERSION "$1")" || return 1
   [ "$(om_version)" = "$1" ] && return 0
   undo_change openmower
   return 1
@@ -1456,8 +1467,140 @@ rebuild_on_om() {
   return $rc
 }
 
+# --- the planner first: with OM_PLANNER=external OpenMower doesn't come up without it ---
+
+om_external() { docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$OM" 2> /dev/null | grep -qx 'OM_PLANNER=external'; }
+# OPENMOWER_VERSION in the .env of build $1's stack set from base $3 to the tag of $2, checked by the base it's built on
+# then (put back when it didn't take). without a .env one is made with the tag of $3
+set_build_om() {
+  local c f e k=OPENMOWER_VERSION made=
+  c=$(box "$1")
+  f=$(label "$c" project.working_dir)/.env
+  if [ ! -e "$f" ]; then
+    printf '%s="%s"\n' $k "${3##*:}" > "$f" && chown "$(stat -c %u:%g "${f%/*}")" "$f" || return 1
+    made=1
+  fi
+  if grep -qE "^[[:space:]]*(export[[:space:]]+)?$k=" "$f"; then e=$(env_set $k "${2##*:}"); else e="\$a $k=\"${2##*:}\""; fi
+  change_file "$1" "$f" "$e" && [ "$(base_of "$c")" = "$2" ] && return 0
+  undo_change "$1"
+  [ -z "$made" ] || rm -f "$f"
+  return 1
+}
+# what's built on OpenMower's image and runs, built on its new version $1 before OpenMower restarts, OPENMOWER_VERSION
+# in their stack's .env set to its tag. noted pending with OpenMower they start right after it (om_builds), seen after
+# it (pf_seen). pf_parts "<part> <rollback tag> <its tag> <its new tag> <commit> <name> <how>" a line. 1 (2: the mower
+# left the dock) when one can't be, pf_undo puts it all back then
+planner_first() {
+  local target="$1" p c base w back img new rc
+  pf_parts=
+  om_external || return 0
+  for p in $(part_ids); do
+    [ "$(kind "$p")" = build ] && [ -z "$(get "pending_$p")" ] || continue
+    c=$(box "$p")
+    running "$c" || continue
+    base=$(base_of "$c")
+    [ -n "$base" ] && [ "$(repo_of "$base")" = "$(repo_of "$target")" ] || continue
+    log "$p: OpenMower runs with OM_PLANNER=external, built on $target first"
+    w=$(rebuild_want "$p") || { log "$p: github didn't answer and the release it runs isn't known"; outcome "$p" error github; return 1; }
+    # shellcheck disable=SC2086
+    set -- $w
+    if [ "$(build_key "$1" "$target")" = "$(get "${p}_failed")" ]; then
+      log "$p: not again, $(said_of "$1" "$2" "$3") didn't start before on $target"
+      outcome "$p" skipped_failed
+      return 1
+    fi
+    room_for $ROOM_BUILD || { log "$p: less than $ROOM_BUILD MB free, not built"; outcome "$p" nospace $ROOM_BUILD "$(free_mb)"; return 1; }
+    if [ "$base" != "$target" ] && ! set_build_om "$p" "$target" "$base"; then
+      log "$p: OPENMOWER_VERSION in its stack's .env can't be set to ${target##*:}"
+      outcome "$p" error env
+      return 1
+    fi
+    img=$(ref_of "$c")
+    new=$(named_of "$c")
+    back=$(keep_back "$(repo_of "$img")" "$(image_of "$c")" "$p")
+    if [ -z "$back" ] || [ -z "$new" ]; then
+      [ -z "$back" ] || undo_back "$back" "$img"
+      undo_change "$p"
+      outcome "$p" error keep
+      return 1
+    fi
+    pf_parts="$pf_parts$p $back $img $new $*
+"
+    build_image "$p" "$1" "$(gate "$p")"
+    rc=$?
+    if [ $rc -ne 0 ]; then
+      [ $rc -eq 2 ] || { log "$p: the build on $target failed, OpenMower stays as it is"; outcome "$p" error build; }
+      return $rc
+    fi
+  done
+}
+# the builds made first gone again, their tags and .env as they were
+pf_undo() {
+  local p n
+  for p in $(pf_ids); do
+    # shellcheck disable=SC2046
+    set -- $(pf_line "$p")
+    n=$(id_of "$3")
+    undo_back "$1" "$2"
+    undo_change "$p"
+    [ -z "$n" ] || [ "$n" = "$(id_of "$2")" ] || docker rmi "$n" > /dev/null 2>&1
+  done
+}
+pf_ids() { printf '%s' "$pf_parts" | cut -d' ' -f1; }
+# its line without the part: <rollback tag> <its tag> <its new tag> <commit> <name> <how>
+pf_line() { printf '%s\n' "$pf_parts" | awk -v p="$1" '$1 == p {sub(/^[^ ]* /, ""); print; exit}'; }
+# the builds made first seen running after OpenMower on its new version $1: noted as built, else back to the one before
+pf_seen() {
+  local p t="$1"
+  for p in $(pf_ids); do
+    # shellcheck disable=SC2046
+    set -- $(pf_line "$p")
+    if seen "$p" "$(id_of "$3")"; then
+      status "pending_$p"
+      keep_change "$p"
+      build_done "$p" "$4" "$5" "$6" "$t"
+      log "$p: runs on OpenMower's new version"
+      [ "$3" = "$2" ] || drop_tag "$2"
+      rebuilt="$rebuilt $p"
+    else
+      go_back "$p" "$1" "$2" "$(get "pending_$p" | cut -d' ' -f4-)"
+    fi
+  done
+}
+# the builds pending with OpenMower: made first for its new version, they start right after it
+om_builds() {
+  local p
+  [ -n "$(get pending_openmower)" ] || return 0
+  for p in $(part_ids); do
+    [ "$(kind "$p")" = build ] && [ -n "$(get "pending_$p")" ] && echo "$p"
+  done
+}
+# OpenMower back to the one before: those back to theirs first, their .env too
+pf_back() {
+  local p
+  for p in $(om_builds); do
+    # shellcheck disable=SC2046
+    set -- $(get "pending_$p")
+    docker tag "$1" "$2"
+    undo_change "$p"
+  done
+}
+# and seen running on them after it
+pf_backed() {
+  local p i
+  for p in $(om_builds); do
+    # shellcheck disable=SC2046
+    set -- $(get "pending_$p")
+    i=$(id_of "$2")
+    if seen "$p" "$i"; then outcome "$p" rolled_back; else outcome "$p" error rollback; fi
+    docker rmi "$1" > /dev/null 2>&1
+    [ "$3" = "$i" ] || docker rmi "$3" > /dev/null 2>&1
+    status "pending_$p"
+  done
+}
+
 update_openmower() {
-  local ref repo before old_version want target remote need free back rc prev d pd at
+  local ref repo before old_version want target remote need free back rc prev d pd at p
   [ "$(kind openmower)" = openmower ] || return 0
   # (its update without a copy: on from where it is)
   ! nokeep_busy || { nokeep_on; return; }
@@ -1549,6 +1692,11 @@ update_openmower() {
   # only OpenMower itself: the stack's other containers (its app, the broker) stay as they are
   with_progress openmower mower compose $T_PULL "$OM" --progress json pull "$(service "$OM")"
   rc=$?
+  # (with OM_PLANNER=external the planner first: without it OpenMower doesn't come up)
+  if [ $rc -eq 0 ]; then
+    planner_first "$target"
+    case $? in 0) ;; 2) rc=2 ;; *) rc=7 ;; esac
+  fi
   # the last word before it restarts: no start of the schedule soon, the schedule held, still in the dock, and its .env
   # still says that version (dockge meanwhile)
   if [ $rc -eq 0 ] && at=$(soon); then
@@ -1567,7 +1715,8 @@ update_openmower() {
   fi
   if [ $rc -ne 0 ]; then
     unhold
-    case $rc in 2 | 3 | 4 | 5 | 6) ;; *) log "openmower: pull failed, it stays as it is" ;; esac
+    case $rc in 2 | 3 | 4 | 5 | 6 | 7) ;; *) log "openmower: pull failed, it stays as it is" ;; esac
+    pf_undo
     undo_change openmower
     om_saved_back
     undo_back "$back" "$ref"
@@ -1579,6 +1728,7 @@ update_openmower() {
     4) outcome openmower error hold ;;
     5) outcome openmower error schedule "$at" && return 2 ;;
     6) outcome openmower error data ;;
+    7) outcome openmower error planner ;;
     *) outcome openmower error pull ;;
     esac
     return 1
@@ -1596,6 +1746,11 @@ update_openmower() {
   fi
   # shellcheck disable=SC2086
   status pending_openmower "$back" "$ref" "$d" "$d" $pd
+  for p in $(pf_ids); do
+    # shellcheck disable=SC2046
+    set -- $(pf_line "$p")
+    status "pending_$p" "$1" "$2" "$(id_of "$3")" "$(build_key "$4" "$target")"
+  done
   # (from here its .env keeps the version that ran, for the way back)
   status openmower_saved
   if restart openmower "$d"; then
@@ -1609,6 +1764,7 @@ update_openmower() {
     outcome openmower updated "$(now)" "$want"
     status openmower_available no "$target"
     [ "$target" = "$ref" ] || drop_tag "$ref"
+    pf_seen "$target"
     # what's built on OpenMower's image: again on the new one
     rebuild_on_om "$target" new
     return

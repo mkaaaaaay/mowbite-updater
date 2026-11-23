@@ -99,7 +99,9 @@ Without a check it waits for Docker's own health check, or else half a minute wi
 
 - **OpenMower:** it switches between edge, release (`latest`) and the version in its `.env` and updates only the
   OpenMower container. The MowBite Planner needs OpenMower 1.5.0 or newer (`OM_PLANNER=external`), the page warns you
-  for an older version.
+  for an older version. With `OM_PLANNER=external` it builds the planner on the new version first (and sets
+  `OPENMOWER_VERSION` in the planner's `.env` to it), then restarts OpenMower and the planner right after it. If the
+  planner can't be built, OpenMower stays as it is. If the new version doesn't run, both go back.
 - **OpenMower without room for two versions:** its card then offers to delete the version that runs first (and what's
   built on it, like the planner) and download the new one, only when you tap it. Until it runs the mower can't mow.
   If the new one doesn't start, the old one comes from its registry again. A download that fails is tried again every

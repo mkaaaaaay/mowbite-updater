@@ -55,7 +55,7 @@ inspect)
     *Mounts*) c "$n" mounts ;;
     *project.config_files*'|'*) echo "proj|/stk|/stk/compose.yaml|" ;;
     *compose.service*) echo svc ;;
-    *working_dir*) echo /stk ;;
+    *working_dir*) if [ "$n" = pl ]; then echo /stkpl; else echo /stk; fi ;;
     *config_files*) echo /stk/compose.yaml ;;
     *compose.project*) echo proj ;;
     '{{.Image}}') c "$n" image ;;
@@ -112,7 +112,12 @@ stop)
   echo "journal $(sed -n 's/^data_put //p' /st/status)" >> $F/calls
   echo exited > "$F/c/$2/status"
   ;;
-tag) echo "$3 $(id_of "$2") $(awk -v r="$2" '$1 == r || $2 == r {print $3; exit}' $F/refs)" >> $F/refs ;;
+tag)
+  # (a tag moves: the image it named before keeps its others)
+  l="$3 $(id_of "$2") $(awk -v r="$2" '$1 == r || $2 == r {print $3; exit}' $F/refs)"
+  sed -i "\|^$3 |d" $F/refs
+  echo "$l" >> $F/refs
+  ;;
 rmi)
   case $2 in *@*) for f in $F/rows/*; do sed -i "\| ${2#*@} |d" "$f"; done ;; esac
   [ -s $F/layers ] || exit 0
@@ -669,7 +674,7 @@ PLANNER=pl
 # (its build cache cleared too, docker here is the script)
 PRUNE=1
 C1=1111111111111111111111111111111111111111
-mkdir -p /stk
+mkdir -p /stk /stkpl
 : > /stk/compose.yaml
 NK_REFS='r/om:edge sha256:om r/om@sha256:dom
 r/pl:edge sha256:pl -
@@ -683,6 +688,7 @@ nk_fresh() {
   printf 'sha256:om l1 l2 l3\nsha256:pl l1 l2 l3 p1\nsha256:pl0 l1 l2 p0\nsha256:loc l1 l9\nsha256:mb m1\n' > /fake/layers
   box_at pl sha256:pl r/pl:edge
   printf '# its stack\nVERSION="edge"\n' > /stk/.env
+  rm -f /stkpl/.env*
   echo 1500 > /fake/free
   echo 629145600 > /fake/cache
   check_room
@@ -704,7 +710,10 @@ layers() { printf 'aaaaaaaaaaaa 1048576\nbbbbbbbbbbbb 104857600\ncccccccccccc 10
 diff_ids() { [ -e /fake/no_ids ] || printf 'l1\nn2\nn3\n'; }
 in_registry() { [ -e /fake/reg_down ] && return 2; ! grep -qxF "$1" /fake/reg_gone 2> /dev/null; }
 want_of() { [ -e /fake/gh_down ] && return 1; echo "$C1 v1.0.0 release"; }
-base_of() { [ "$1" = pl ] && echo r/om:edge; }
+# (the planner's stack: OPENMOWER_VERSION in its .env, edge without it. what compose names, OpenMower's by its VERSION)
+plv() { v=$(sed -n 's/^OPENMOWER_VERSION="\(.*\)"$/\1/p' /stkpl/.env 2> /dev/null | tail -n1); echo "${v:-edge}"; }
+base_of() { [ "$1" = pl ] && echo "r/om:$(plv)"; }
+named_of() { if [ "$1" = pl ]; then echo "r/pl:$(plv)"; elif [ "$1" = om ]; then echo "r/om:$(om_version)"; else ref_of "$1"; fi; }
 context_of() { [ "$1" = pl ] && echo https://github.com/x/pl.git#main; }
 with_progress() {
   shift 2
@@ -725,18 +734,19 @@ compose() {
   echo "compose $c $*" >> /fake/calls
   case " $* " in
   *" rm "*) [ ! -e "/fake/rm_fail_$c" ] && rm -rf "/fake/c/$c" ;;
+  *" pull "*) pull_image "$(named_of "$c")" ;;
   *" build "*)
     # (with an id in it only on that version of OpenMower)
     [ -e /fake/build_fail ] && { [ ! -s /fake/build_fail ] || [ "$(id_of r/om:edge)" = "$(cat /fake/build_fail)" ]; } && return 1
     n=$(($(cat /fake/builds 2> /dev/null || echo 0) + 1)) && echo $n > /fake/builds
-    r=$(ref_of "$c")
+    r=$(named_of "$c")
     sed -i "\\|^$r |d" /fake/refs
     echo "$r sha256:b$n -" >> /fake/refs
     echo "sha256:b$n l1 n2 n3 p1" >> /fake/layers
     ;;
   *" up "*)
     [ ! -e "/fake/up_fail_$c" ] || return 1
-    r=$(ref_of "$c")
+    r=$(named_of "$c")
     mkdir -p "/fake/c/$c"
     echo "$r" > "/fake/c/$c/ref"
     id_of "$r" > "/fake/c/$c/image"
@@ -1253,6 +1263,117 @@ done
 run again planner
 [ "$(get planner | cut -d' ' -f1)" = updated ] && [ "$(cat /fake/c/pl/status)" = running ] && [ -z "$(get gone_planner)$(gone_due)" ] && [ "$(mower)" = "0 IDLE" ] ||
   bad "external: not built while OpenMower doesn't answer: $(get planner)"
+
+# --- OM_PLANNER=external with room for both: the planner built on the new version before OpenMower restarts ---
+# (restarts and the .env put back as the updater does them, the planner started by OpenMower's start)
+real() {
+  eval "$(grep '^restart() {' /r/updater.sh)"
+  eval "$(sed -n '/^undo_change() {/,/^}/p' /r/updater.sh)"
+  om_external() { [ -e /fake/external ]; }
+}
+pf_fresh() {
+  nk_fresh
+  : > /fake/external
+  echo 99999 > /fake/free
+}
+pl_tags() { grep '^r/pl:' /fake/refs | cut -d' ' -f1 | sort -u | tr '\n' ' '; }
+# the same tag: built before the restart, started right after OpenMower, seen after it
+pf_fresh
+(real && update_openmower)
+[ "$(get openmower | cut -d' ' -f1,3)" = "updated edge" ] && [ "$(id om)" = sha256:new ] && [ "$(get planner | cut -d' ' -f1,3)" = "updated v1.0.0" ] &&
+  [ "$(id pl)" = sha256:b1 ] && [ "$(get planner_base_id)" = sha256:new ] && [ "$(mower)" = 1 ] ||
+  bad "first: not updated: $(get openmower), $(get planner), runs $(id om) $(id pl)"
+[ "$(first 'compose pl .* build svc')" -lt "$(first 'compose om up -d')" ] && [ "$(first 'compose om up -d')" -lt "$(first 'compose pl up -d')" ] &&
+  [ "$(first 'compose pl up -d')" -lt "$(first '^seen openmower')" ] && [ "$(grep -c 'compose pl .* build svc' /fake/calls)" = 1 ] ||
+  bad "first: not in its order: $(grep '^compose\|^seen' /fake/calls | tr '\n' '|')"
+! grep -q '^pending_\|^changed_' /st/status && [ ! -e /stkpl/.env ] || bad "first: notes left or the planner's .env made: $(grep '^pending_\|^changed_' /st/status)"
+# another tag: OPENMOWER_VERSION in the planner's .env (made when there's none) and its image's tag go with it
+pf_fresh
+echo 'openmower latest' > "$CONF"
+(real && update_openmower)
+[ "$(get openmower | cut -d' ' -f1,3)" = "updated latest" ] && [ "$(cat /fake/c/om/ref)" = r/om:latest ] && [ "$(cat /fake/c/pl/ref)" = r/pl:latest ] &&
+  [ "$(id pl)" = sha256:b1 ] && [ "$(get planner_base_id)" = sha256:new ] && grep -q '^VERSION="latest"$' /stk/.env ||
+  bad "first: not on the other tag: $(get openmower), $(get planner), runs $(cat /fake/c/om/ref) $(cat /fake/c/pl/ref)"
+[ "$(cat /stkpl/.env)" = 'OPENMOWER_VERSION="latest"' ] && [ ! -e /stkpl/.env.before-update ] && ! grep -q '^changed_\|^pending_' /st/status &&
+  [ "$(first 'compose pl .* build svc')" -lt "$(first 'compose om up -d')" ] || bad "first: the planner's .env: $(cat /stkpl/.env), $(grep '^changed_' /st/status)"
+# (a line of its own changed, the rest of the file as it was)
+pf_fresh
+echo 'openmower latest' > "$CONF"
+printf '# planner\nOPENMOWER_VERSION="edge"\nMOWBITE_WORKERS=2\n' > /stkpl/.env
+(real && update_openmower)
+[ "$(cat /stkpl/.env | tr '\n' '|')" = '# planner|OPENMOWER_VERSION="latest"|MOWBITE_WORKERS=2|' ] || bad "first: the planner's .env: $(cat /stkpl/.env | tr '\n' '|')"
+pf_fresh
+echo 'openmower latest' > "$CONF"
+printf 'MOWBITE_WORKERS=2\n' > /stkpl/.env
+(real && update_openmower)
+[ "$(cat /stkpl/.env | tr '\n' '|')" = 'MOWBITE_WORKERS=2|OPENMOWER_VERSION="latest"|' ] && [ "$(id pl)" = sha256:b1 ] || bad "first: the planner's .env without the line: $(cat /stkpl/.env | tr '\n' '|')"
+# the planner can't be built: OpenMower stays as it is, nothing restarted, its .env and the planner's as they were
+pf_fresh
+echo 'openmower latest' > "$CONF"
+printf 'OPENMOWER_VERSION="edge"\n' > /stkpl/.env
+: > /fake/build_fail
+(real && update_openmower)
+rm /fake/build_fail
+[ "$(get openmower)" = "error planner" ] && [ "$(get planner)" = "error build" ] && [ "$(id om)" = sha256:om ] && [ "$(id pl)" = sha256:pl ] &&
+  ! called 'compose om up' && ! called 'compose pl up' || bad "first: a planner that can't be built: $(get openmower), $(get planner), runs $(id om) $(id pl)"
+grep -q '^VERSION="edge"$' /stk/.env && [ "$(cat /stkpl/.env)" = 'OPENMOWER_VERSION="edge"' ] && [ ! -e /stkpl/.env.before-update ] &&
+  [ "$(pl_tags)" = "r/pl:before-1 r/pl:edge " ] && ! grep -q '^r/om:latest \|:rb-' /fake/refs && ! grep -q '^pending_\|^changed_' /st/status ||
+  bad "first: not as it was: $(cat /stk/.env /stkpl/.env | tr '\n' '|'), $(pl_tags), $(grep '^pending_\|^changed_' /st/status)"
+# (built, then OpenMower's data can't be kept: the build on the same tag gone again, the one before under it)
+pf_fresh
+(
+  real
+  keep_data() { return 1; }
+  update_openmower
+)
+[ "$(get openmower)" = "error data" ] && [ "$(id om)" = sha256:om ] && [ "$(id pl)" = sha256:pl ] && [ "$(id_of r/pl:edge)" = sha256:pl ] &&
+  ! grep -q ':rb-' /fake/refs && ! grep -q '^sha256:b1 ' /fake/layers && ! called 'compose om up' && ! grep -q '^pending_\|^changed_' /st/status ||
+  bad "first: not as it was after its data: $(get openmower), $(pl_tags), $(cut -d' ' -f1 /fake/layers | tr '\n' ' ')"
+# the new version doesn't run: both back, the planner's .env and its build on the new version too
+pf_fresh
+echo 'openmower latest' > "$CONF"
+printf 'OPENMOWER_VERSION="edge"\n' > /stkpl/.env
+echo sha256:new > /fake/nostart
+(real && update_openmower)
+[ "$(get openmower | cut -d' ' -f1)" = rolled_back ] && [ "$(get planner)" = rolled_back ] && [ "$(id om)" = sha256:om ] && [ "$(id pl)" = sha256:pl ] &&
+  [ "$(cat /fake/c/pl/ref)" = r/pl:edge ] && [ "$(mower)" = 1 ] || bad "first: not back: $(get openmower), $(get planner), runs $(id om) $(id pl)"
+grep -q '^VERSION="edge"$' /stk/.env && [ "$(cat /stkpl/.env)" = 'OPENMOWER_VERSION="edge"' ] && ! grep -q '^r/pl:latest \|^r/pl:rb-\|^sha256:b1 ' /fake/refs /fake/layers &&
+  ! grep -q '^pending_\|^changed_' /st/status || bad "first: left after going back: $(cat /stkpl/.env), $(pl_tags), $(grep '^pending_\|^changed_' /st/status)"
+# a stop right after the restart: the planner started with OpenMower when that's looked at again
+pf_fresh
+echo 'openmower latest' > "$CONF"
+(
+  real
+  seen() { exit 9; }
+  update_openmower
+)
+[ -n "$(get pending_openmower)" ] && [ -n "$(get pending_planner)" ] || bad "first: nothing pending after a stop: $(grep '^pending_' /st/status)"
+box_at pl sha256:pl r/pl:edge
+box_at om sha256:om r/om:edge
+: > /fake/calls
+(real && settle)
+[ "$(get openmower | cut -d' ' -f1)" = updated ] && [ "$(get planner | cut -d' ' -f1)" = updated ] && [ "$(id om)" = sha256:new ] && [ "$(id pl)" = sha256:b1 ] &&
+  [ "$(first 'compose om up -d')" -lt "$(first 'compose pl up -d')" ] && [ "$(first 'compose pl up -d')" -lt "$(first '^seen openmower')" ] &&
+  ! grep -q '^pending_\|^changed_' /st/status || bad "first: not settled: $(get openmower), $(get planner), runs $(id om) $(id pl)"
+# (and back when it doesn't run then)
+pf_fresh
+echo 'openmower latest' > "$CONF"
+(
+  real
+  seen() { exit 9; }
+  update_openmower
+)
+echo sha256:new > /fake/nostart
+(real && settle)
+[ "$(get openmower | cut -d' ' -f1)" = rolled_back ] && [ "$(get planner)" = rolled_back ] && [ "$(id om)" = sha256:om ] && [ "$(id pl)" = sha256:pl ] &&
+  [ "$(cat /stkpl/.env)" = 'OPENMOWER_VERSION="edge"' ] && ! grep -q '^pending_\|^changed_' /st/status ||
+  bad "first: not back after a stop: $(get openmower), $(get planner), runs $(id om) $(id pl)"
+# without OM_PLANNER=external as before: built after OpenMower runs
+pf_fresh
+rm /fake/external
+(real && update_openmower)
+[ "$(get planner | cut -d' ' -f1)" = updated ] && [ "$(first 'compose om up -d')" -lt "$(first 'compose pl .* build svc')" ] ||
+  bad "first: built first without OM_PLANNER=external: $(grep '^compose' /fake/calls | tr '\n' '|')"
 fi
 
 if [ "$only" = all ] || [ "$only" = os ]; then
