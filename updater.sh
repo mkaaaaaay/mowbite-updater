@@ -206,6 +206,17 @@ hold() {
   done
   sleep "$HOLD_WAIT"
 }
+# whether hold would take now, without holding anything: not on MowBite OS, OpenMower's brokers known and answering
+can_hold() {
+  local b list
+  os_host && return 1
+  list=$(om_brokers)
+  [ $? -ne 1 ] || return 1
+  for b in $list; do
+    on_broker mosquitto_sub "$b" mowbite/hold -C 1 -W 2 > /dev/null
+    case $? in 0 | 27) ;; *) return 1 ;; esac
+  done
+}
 # a broker in OpenMower's container (its legacy image, without persistence) forgets the hold when it restarts: set
 # again as soon as it takes it, before anything looks at the mower
 rehold() {
@@ -1193,6 +1204,11 @@ update_image() {
     outcome "$p" skipped_failed
     return 0
   fi
+  if [ "$target" != "$current" ] && [ -z "$(stackfile "$c" "$current")" ]; then
+    log "$p: the compose file can't be changed, nothing downloaded"
+    outcome "$p" error compose
+    return 1
+  fi
   # room for what it has to download (its missing layers x5, else as much as the image that runs) and some to spare.
   # (the layers looked up once: for the room and the bar)
   layers "$target" > "$STATE/layers"
@@ -1480,6 +1496,12 @@ update_openmower() {
     log "openmower: MowBite's schedule may start the mower at $(date -d "@$at" '+%F %T'), it stays as it is until then"
     outcome openmower error schedule "$at"
     return 2
+  fi
+  # (asked before GBs are downloaded for nothing, again before the restart)
+  if ! can_hold; then
+    log "openmower: MowBite's schedule can't be held, nothing downloaded"
+    outcome openmower error hold
+    return 1
   fi
   older "${want#v}" 1.5.0 && exists "$PLANNER" && log "openmower: $want has no OM_PLANNER=external (from 1.5.0), the MowBite Planner won't work with it"
   # (the layers looked up once: for the room and the bar)

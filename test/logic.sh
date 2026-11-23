@@ -198,6 +198,7 @@ now() { n=$(($(cat /fake/now) + 1)) && echo "$n" > /fake/now && echo "$n"; }
 mower() { cat /fake/mower; }
 soon() { [ -s /fake/soon ] && cat /fake/soon; }
 hold() { echo "hold $1" >> /fake/calls; [ ! -e /fake/hold_fail ] && held=" own"; }
+can_hold() { [ ! -e /fake/hold_fail ]; }
 unhold() { echo unhold >> /fake/calls; held=; }
 rehold() { :; }
 restart() { echo "restart $1 $2" >> /fake/calls; echo running > "/fake/c/$(box "$1")/status"; [ ! -e /fake/restart_fail ]; }
@@ -458,6 +459,21 @@ echo x >> "/st/data/mowbite-$t/1.tar"
 : > /fake/calls
 put_by_hand mowbite "$t"
 [ "$(get mowbite)" = "error data_put" ] && ! called "^restart" && called "^unhold" || bad "a changed copy by hand: $(get mowbite)"
+
+# --- another tag its compose file can't take: nothing downloaded ---
+fresh
+(
+  MANUAL=1
+  channel() { echo beta; }
+  image_target() { echo r/mowbite:next; }
+  remote_digest() { echo sha256:new; }
+  layers() { :; }
+  need_mb() { echo 1; }
+  free_mb() { echo 99999; }
+  with_progress() { echo "pull $*" >> /fake/calls; }
+  update_image mowbite
+)
+[ "$(get mowbite)" = "error compose" ] && ! called "^pull" && ! called "^tag" || bad "a compose file that can't take it: $(get mowbite)"
 
 # --- one updater on a docker: a second one waits for the first ---
 (exec 9>> /.mowbite-updater.lock && flock 9 && sleep 3) &
@@ -756,6 +772,12 @@ update_openmower
 [ "$(get openmower | cut -d' ' -f1)" = nospace ] && [ "$(get openmower_nokeep)" = "yes 201 planner r/om:edge,r/pl:edge r/pl:before-1" ] ||
   bad "nokeep: not offered: $(get openmower), $(get openmower_nokeep)"
 ! called "^compose" && ! called "^rmi" && [ "$(id om)" = sha256:om ] || bad "nokeep: only offered, but something changed"
+# (the schedule that can't be held: nothing downloaded, nothing offered)
+nk_fresh
+: > /fake/hold_fail
+update_openmower
+[ "$(get openmower)" = "error hold" ] && [ -z "$(get openmower_nokeep)" ] && ! called "^compose" || bad "nokeep: the schedule not held, but: $(get openmower)"
+rm /fake/hold_fail
 # and not: each reason
 nk_fresh
 echo r/om@sha256:dom > /fake/reg_gone
